@@ -1,5 +1,6 @@
 -- ================================================================================
 -- 🌱 سكربت خليل | Khalil Script v4.0 — مع تخفيف اللاق + كشف ذكي
+-- ✅ نسخة نهائية: إصلاح Anti-Lag + Auto Steal آمن + ESP نظيف + Cleanup شامل
 -- ================================================================================
 
 local Players = game:GetService("Players")
@@ -68,16 +69,15 @@ end
 local function ch() return LocalPlayer.Character end
 local function hu() local c = ch() return c and c:FindFirstChildOfClass("Humanoid") end
 local function rt() local c = ch() return c and c:FindFirstChild("HumanoidRootPart") end
-local function dist3(a, b) return (a - b).Magnitude end
 
 -- ================================================================================
 -- 🔍 نظام كشف ذكي للزراعة
 -- ================================================================================
 local Farm = {
-    remotes = {},       -- كل الـ Remotes
-    buttons = {},       -- كل الأزرار في PlayerGui
-    plantParts = {},    -- أجزاء النباتات في Workspace
-    guessedRemotes = {},-- تخمين الأسماء المهمة
+    remotes = {},
+    buttons = {},
+    plantParts = {},
+    guessedRemotes = {},
     lastScan = 0,
 }
 
@@ -204,6 +204,101 @@ local function createTextBox(p, text, sz, pos, size, bg, borderCol)
 end
 
 -- ================================================================================
+-- ⚡ Anti-Lag (يُعرّف هنا قبل الواجهة)
+-- ================================================================================
+local LagState = { enabled = false, originals = {}, connections = {} }
+
+local function enableLagReducer()
+    if LagState.enabled then return end
+    LagState.enabled = true
+    LagState.originals = {}
+    LagState.originals.Brightness = Lighting.Brightness
+    LagState.originals.GlobalShadows = Lighting.GlobalShadows
+    LagState.originals.FogEnd = Lighting.FogEnd
+    LagState.originals.QualityLevel = settings().Rendering.QualityLevel
+
+    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+
+    Lighting.Brightness = 1
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 100
+    Lighting.ShadowSoftness = 0
+
+    for _, v in ipairs(Lighting:GetChildren()) do
+        if v:IsA("PostEffect") or v:IsA("Atmosphere") then
+            if v.Enabled then LagState.originals[v] = true v.Enabled = false end
+        end
+    end
+
+    LagState.originals.particles = {}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
+            if v.Enabled then LagState.originals.particles[v] = true v.Enabled = false end
+        end
+    end
+
+    LagState.originals.decals = {}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("Decal") or v:IsA("Texture") then
+            if v.Transparency < 1 then LagState.originals.decals[v] = v.Transparency v.Transparency = 1 end
+        end
+    end
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character then
+            for _, v in ipairs(p.Character:GetDescendants()) do
+                if v:IsA("MeshPart") then v.RenderFidelity = Enum.RenderFidelity.Performance
+                elseif v:IsA("Decal") or v:IsA("Texture") then v.Transparency = 1
+                elseif v:IsA("ParticleEmitter") or v:IsA("Trail") then v.Enabled = false end
+            end
+        end
+    end
+
+    local sky = Lighting:FindFirstChildOfClass("Sky")
+    if sky then LagState.originals.sky = sky LagState.originals.skyParent = sky.Parent sky.Parent = nil end
+
+    local conn = workspace.DescendantAdded:Connect(function(v)
+        if not LagState.enabled then return end
+        if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
+            LagState.originals.particles[v] = true v.Enabled = false
+        elseif v:IsA("Decal") or v:IsA("Texture") then
+            LagState.originals.decals[v] = v.Transparency v.Transparency = 1
+        end
+    end)
+    table.insert(LagState.connections, conn)
+    print("⚡ تم تفعيل تخفيف اللاق")
+end
+
+local function disableLagReducer()
+    if not LagState.enabled then return end
+    LagState.enabled = false
+    pcall(function()
+        if LagState.originals.QualityLevel then settings().Rendering.QualityLevel = LagState.originals.QualityLevel
+        else settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic end
+    end)
+    Lighting.Brightness = LagState.originals.Brightness or 2
+    Lighting.GlobalShadows = LagState.originals.GlobalShadows or true
+    Lighting.FogEnd = LagState.originals.FogEnd or 1e5
+
+    if LagState.originals.particles then
+        for v, _ in pairs(LagState.originals.particles) do
+            if v and v.Parent then pcall(function() v.Enabled = true end) end
+        end
+    end
+    if LagState.originals.decals then
+        for v, t in pairs(LagState.originals.decals) do
+            if v and v.Parent then pcall(function() v.Transparency = t end) end
+        end
+    end
+    if LagState.originals.sky and LagState.originals.skyParent then
+        pcall(function() LagState.originals.sky.Parent = LagState.originals.skyParent end)
+    end
+    for _, c in ipairs(LagState.connections) do pcall(function() c:Disconnect() end) end
+    LagState.connections = {}
+    print("🔄 تم إيقاف تخفيف اللاق")
+end
+
+-- ================================================================================
 -- الواجهة الأساسية
 -- ================================================================================
 local ScreenGui = Instance.new("ScreenGui")
@@ -217,10 +312,6 @@ MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 MainFrame.Active = false
 addCorner(MainFrame, UDim.new(0, 18))
 addStroke(MainFrame, Colors.Blue, 3)
-
-local MainGradient = Instance.new("UIGradient", MainFrame)
-MainGradient.Rotation = 90
-MainGradient.Color = ColorSequence.new(Color3.fromRGB(12, 22, 52), Color3.fromRGB(5, 9, 24))
 
 local UIScaleInstance = Instance.new("UIScale", MainFrame)
 
@@ -430,12 +521,11 @@ addCorner(HitboxFill, UDim.new(1, 0))
 local HitboxHandle = createFrame(HitboxBar, UDim2.new(0, -9, 0.5, -9), UDim2.fromOffset(18, 18), Colors.White)
 addCorner(HitboxHandle, UDim.new(1, 0))
 createLabel(HitboxRow, "1", 12, UDim2.fromOffset(56, 72), UDim2.fromOffset(30, 14), Color3.fromRGB(200, 220, 255)).TextXAlignment = Enum.TextXAlignment.Left
-createLabel(HitboxRow, "50", 12, UDim2.fromOffset(198, 72), UDim2.fromOffset(30, 14), Color3.fromRGB(200, 220, 255)).TextXAlignment = Enum.TextXAlignment.Right
+createLabel(HitboxRow, "20", 12, UDim2.fromOffset(198, 72), UDim2.fromOffset(30, 14), Color3.fromRGB(200, 220, 255)).TextXAlignment = Enum.TextXAlignment.Right
 
 local function setHitboxValue(v, isManual)
-    if isManual then Values.hitboxSize = math.clamp(math.floor(v + 0.5), 1, 100)
-    else Values.hitboxSize = math.clamp(math.floor(v + 0.5), 1, 50) end
-    local a = math.clamp((Values.hitboxSize - 1) / 49, 0, 1)
+    Values.hitboxSize = math.clamp(math.floor(v + 0.5), 1, 20)
+    local a = math.clamp((Values.hitboxSize - 1) / 19, 0, 1)
     HitboxFill.Size = UDim2.new(a, 0, 1, 0)
     HitboxHandle.Position = UDim2.new(a, -9, 0.5, -9)
     HitboxInput.Text = tostring(Values.hitboxSize)
@@ -445,7 +535,7 @@ HitboxInput.FocusLost:Connect(function() setHitboxValue(tonumber(HitboxInput.Tex
 HitboxMinus.MouseButton1Click:Connect(function() setHitboxValue(Values.hitboxSize - 1, false) end)
 HitboxPlus.MouseButton1Click:Connect(function() setHitboxValue(Values.hitboxSize + 1, false) end)
 local hitboxDragging = false
-local function hitboxFromX(x) setHitboxValue(1 + math.clamp((x - HitboxHit.AbsolutePosition.X) / HitboxHit.AbsoluteSize.X, 0, 1) * 49, false) end
+local function hitboxFromX(x) setHitboxValue(1 + math.clamp((x - HitboxHit.AbsolutePosition.X) / HitboxHit.AbsoluteSize.X, 0, 1) * 19, false) end
 HitboxHit.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then hitboxDragging = true; hitboxFromX(i.Position.X) end
 end)
@@ -478,13 +568,8 @@ UISetters["freecam"] = makeSwitch(makeRow(HomePage, 48, Colors.Purple, "🎬", "
 UISetters["noshake"] = makeSwitch(makeRow(HomePage, 48, Colors.Cyan, "📳", "منع اهتزاز الكاميرا"), Colors.Cyan, function(on) State.noshake = on end)
 UISetters["fullbright"] = makeSwitch(makeRow(HomePage, 48, Colors.Orange, "☀️", "إضاءة كاملة"), Colors.Orange, function(on) State.fullbright = on end)
 
--- ⚡ زر تخفيف اللاق
 UISetters["lagReducer"] = makeSwitch(makeRow(HomePage, 48, Colors.Pink, "⚡", "تخفيف اللاق (Anti-Lag)"), Colors.Pink, function(on)
-    if on then
-        if enableLagReducer then enableLagReducer() end
-    else
-        if disableLagReducer then disableLagReducer() end
-    end
+    if on then enableLagReducer() else disableLagReducer() end
 end)
 
 -- ================================================================================
@@ -506,7 +591,6 @@ UISetters["autoSteal"] = makeSwitch(makeRow(FarmPage, 48, Colors.Pink, "🌱", "
 UISetters["espPlants"] = makeSwitch(makeRow(FarmPage, 48, Color3.fromRGB(0, 255, 100), "🌿", "ESP النباتات"), Color3.fromRGB(0, 255, 100), function(on) State.espPlants = on end)
 UISetters["espPlayers"] = makeSwitch(makeRow(FarmPage, 48, Color3.fromRGB(255, 100, 100), "👥", "ESP اللاعبين"), Color3.fromRGB(255, 100, 100), function(on) State.espPlayers = on end)
 
--- زر إعادة الفحص
 local ScanRow = makeRow(FarmPage, 68, Colors.Purple, "🔄", "فحص اللعبة + طباعة الكونسول")
 local ScanBtn = createButton(ScanRow, "🔍 فحص الآن", 13, UDim2.fromOffset(10, 40), UDim2.fromOffset(110, 24), Color3.fromRGB(50, 20, 90))
 addCorner(ScanBtn, UDim.new(0, 6)); addStroke(ScanBtn, Colors.Purple, 1.5)
@@ -525,18 +609,15 @@ end)
 
 DiagBtn.MouseButton1Click:Connect(function()
     print("═══════════ 📋 تشخيص كامل ═══════════")
-    
     print("\n📡 [Remotes] — المجموع: " .. #Farm.remotes)
     for i, v in ipairs(Farm.remotes) do
         if i <= 40 then print("  " .. i .. ". " .. v:GetFullName()) end
     end
     if #Farm.remotes > 40 then print("  ... و " .. (#Farm.remotes - 40) .. " أخرى") end
-    
     print("\n🎯 [تخمينات مهمة]")
     for name, remote in pairs(Farm.guessedRemotes) do
         print("  • " .. name .. " → " .. remote.Name)
     end
-    
     print("\n🖥️ [أزرار قابلة للنقر] — المجموع: " .. #Farm.buttons)
     local count = 0
     for _, b in ipairs(Farm.buttons) do
@@ -549,13 +630,11 @@ DiagBtn.MouseButton1Click:Connect(function()
         end
     end
     if count > 25 then print("  ... و " .. (count - 25) .. " أخرى") end
-    
     print("\n🌱 [نباتات في Workspace] — المجموع: " .. #Farm.plantParts)
     for i, p in ipairs(Farm.plantParts) do
         if i <= 15 then print("  " .. i .. ". " .. p:GetFullName()) end
     end
     if #Farm.plantParts > 15 then print("  ... و " .. (#Farm.plantParts - 15) .. " أخرى") end
-    
     print("\n═══════ انتهى التشخيص ═══════")
     print("👆 انسخ كل اللي فوق وأرسله")
 end)
@@ -618,10 +697,17 @@ LoadBtn.MouseButton1Click:Connect(function()
     if not ok2 then return end
     if decoded.State then
         for k, v in pairs(decoded.State) do
-            if State[k] ~= nil then State[k] = v if UISetters[k] then UISetters[k](v) end end
+            if State[k] ~= nil then
+                State[k] = v
+                if UISetters[k] then UISetters[k](v) end
+            end
         end
     end
-    if decoded.Values then for k, v in pairs(decoded.Values) do if Values[k] ~= nil then Values[k] = v end end end
+    if decoded.Values then
+        for k, v in pairs(decoded.Values) do
+            if Values[k] ~= nil then Values[k] = v end
+        end
+    end
     pcall(function() setSpeed(Values.speed, false) end)
     pcall(function() setHitboxValue(Values.hitboxSize, true) end)
     pcall(function() setScale(Values.uiScale) end)
@@ -662,24 +748,24 @@ StatsLabel.TextXAlignment = Enum.TextXAlignment.Left
 StatsLabel.TextYAlignment = Enum.TextYAlignment.Top
 StatsLabel.TextWrapped = true
 
+-- ✅ عدّاد FPS يتوقف لما الصفحة مخفية (توفير موارد)
 local fpsN, fpsT = 0, 0
 bind(RunService.RenderStepped, function(dt)
+    if not InfoPage.Visible then fpsN, fpsT = 0, 0 return end
     fpsN += 1; fpsT += dt
     if fpsT >= 0.5 then
         local fps = math.floor(fpsN / fpsT + 0.5)
         fpsN, fpsT = 0, 0
-        if InfoPage.Visible then
-            local ping = 0
-            pcall(function() ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue() + 0.5) end)
-            local pos = "-"
-            local c = LocalPlayer.Character
-            if c then local r = c:FindFirstChild("HumanoidRootPart")
-                if r then pos = math.floor(r.Position.X) .. ", " .. math.floor(r.Position.Y) .. ", " .. math.floor(r.Position.Z) end
-            end
-            StatsLabel.Text = "الإطارات: " .. fps .. "\nزمن الاستجابة: " .. ping .. " ميث"
-                .. "\nعدد اللاعبين: " .. #Players:GetPlayers() .. "/" .. Players.MaxPlayers
-                .. "\nالشخصية: " .. LocalPlayer.DisplayName .. "\nالموقع: " .. pos
+        local ping = 0
+        pcall(function() ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue() + 0.5) end)
+        local pos = "-"
+        local c = LocalPlayer.Character
+        if c then local r = c:FindFirstChild("HumanoidRootPart")
+            if r then pos = math.floor(r.Position.X) .. ", " .. math.floor(r.Position.Y) .. ", " .. math.floor(r.Position.Z) end
         end
+        StatsLabel.Text = "الإطارات: " .. fps .. "\nزمن الاستجابة: " .. ping .. " ميث"
+            .. "\nعدد اللاعبين: " .. #Players:GetPlayers() .. "/" .. Players.MaxPlayers
+            .. "\nالشخصية: " .. LocalPlayer.DisplayName .. "\nالموقع: " .. pos
     end
 end)
 
@@ -771,104 +857,8 @@ end)
 -- تنفيذ الميزات
 -- ════════════════════════════════════════════════════════════════════════════════
 
--- ⚡ ============ تخفيف اللاق ============
-local LagState = { enabled = false, originals = {}, connections = {} }
-
-function enableLagReducer()
-    if LagState.enabled then return end
-    LagState.enabled = true
-    LagState.originals = {}
-    LagState.originals.Brightness = Lighting.Brightness
-    LagState.originals.GlobalShadows = Lighting.GlobalShadows
-    LagState.originals.FogEnd = Lighting.FogEnd
-    LagState.originals.QualityLevel = settings().Rendering.QualityLevel
-
-    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
-
-    Lighting.Brightness = 1
-    Lighting.GlobalShadows = false
-    Lighting.FogEnd = 100
-    Lighting.ShadowSoftness = 0
-
-    for _, v in ipairs(Lighting:GetChildren()) do
-        if v:IsA("PostEffect") or v:IsA("Atmosphere") then
-            if v.Enabled then LagState.originals[v] = true v.Enabled = false end
-        end
-    end
-
-    LagState.originals.particles = {}
-    for _, v in ipairs(workspace:GetDescendants()) do
-        if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
-            if v.Enabled then LagState.originals.particles[v] = true v.Enabled = false end
-        end
-    end
-
-    LagState.originals.decals = {}
-    for _, v in ipairs(workspace:GetDescendants()) do
-        if v:IsA("Decal") or v:IsA("Texture") then
-            if v.Transparency < 1 then LagState.originals.decals[v] = v.Transparency v.Transparency = 1 end
-        end
-    end
-
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p.Character then
-            for _, v in ipairs(p.Character:GetDescendants()) do
-                if v:IsA("MeshPart") then v.RenderFidelity = Enum.RenderFidelity.Performance
-                elseif v:IsA("Decal") or v:IsA("Texture") then v.Transparency = 1
-                elseif v:IsA("ParticleEmitter") or v:IsA("Trail") then v.Enabled = false end
-            end
-        end
-    end
-
-    local sky = Lighting:FindFirstChildOfClass("Sky")
-    if sky then LagState.originals.sky = sky LagState.originals.skyParent = sky.Parent sky.Parent = nil end
-
-    local conn = workspace.DescendantAdded:Connect(function(v)
-        if not LagState.enabled then return end
-        if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
-            LagState.originals.particles[v] = true v.Enabled = false
-        elseif v:IsA("Decal") or v:IsA("Texture") then
-            LagState.originals.decals[v] = v.Transparency v.Transparency = 1
-        end
-    end)
-    table.insert(LagState.connections, conn)
-    print("⚡ تم تفعيل تخفيف اللاق")
-end
-
-function disableLagReducer()
-    if not LagState.enabled then return end
-    LagState.enabled = false
-    pcall(function()
-        if LagState.originals.QualityLevel then settings().Rendering.QualityLevel = LagState.originals.QualityLevel
-        else settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic end
-    end)
-    Lighting.Brightness = LagState.originals.Brightness or 2
-    Lighting.GlobalShadows = LagState.originals.GlobalShadows or true
-    Lighting.FogEnd = LagState.originals.FogEnd or 1e5
-
-    for v, _ in pairs(LagState.originals) do
-        if typeof(v) == "Instance" and v.Parent then pcall(function() v.Enabled = true end) end
-    end
-    if LagState.originals.particles then
-        for v, _ in pairs(LagState.originals.particles) do
-            if v and v.Parent then pcall(function() v.Enabled = true end) end
-        end
-    end
-    if LagState.originals.decals then
-        for v, t in pairs(LagState.originals.decals) do
-            if v and v.Parent then pcall(function() v.Transparency = t end) end
-        end
-    end
-    if LagState.originals.sky and LagState.originals.skyParent then
-        pcall(function() LagState.originals.sky.Parent = LagState.originals.skyParent end)
-    end
-    for _, c in ipairs(LagState.connections) do pcall(function() c:Disconnect() end) end
-    LagState.connections = {}
-    print("🔄 تم إيقاف تخفيف اللاق")
-end
-
 -- ============ Noclip ============
-RunService.Stepped:Connect(function()
+bind(RunService.Stepped, function()
     if not State.noclip then return end
     local c = ch()
     if not c then return end
@@ -879,7 +869,7 @@ end)
 
 -- ============ Fly ============
 local bv, bg
-RunService.RenderStepped:Connect(function()
+bind(RunService.RenderStepped, function()
     local h, r = hu(), rt()
     if not State.fly then
         if bv then bv:Destroy() bv = nil end
@@ -908,14 +898,14 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ============ Speed ============
-RunService.Heartbeat:Connect(function()
+bind(RunService.Heartbeat, function()
     if not State.speed then return end
     local h = hu()
     if h and h.WalkSpeed ~= Values.speed then h.WalkSpeed = Values.speed end
 end)
 
 -- ============ Jump ============
-RunService.Heartbeat:Connect(function()
+bind(RunService.Heartbeat, function()
     if not State.jump then return end
     local h = hu()
     if h and h.UseJumpPower and h.JumpPower ~= Values.jumpPower then h.JumpPower = Values.jumpPower end
@@ -928,7 +918,7 @@ end)
 
 -- ============ God ============
 task.spawn(function()
-    while true do
+    while IsAlive do
         task.wait(0.5)
         if State.god then
             local h = hu()
@@ -937,10 +927,10 @@ task.spawn(function()
     end
 end)
 
--- ============ Hitbox ============
+-- ============ Hitbox (مع تنظيف الـ savedSizes) ============
 local savedSizes = {}
 task.spawn(function()
-    while true do
+    while IsAlive do
         task.wait(0.4)
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= LocalPlayer and p.Character then
@@ -958,11 +948,17 @@ task.spawn(function()
                 end
             end
         end
+        -- 🧹 تنظيف HRPs المحذوفة (منع تسرب الذاكرة)
+        for hrp, _ in pairs(savedSizes) do
+            if not hrp or not hrp.Parent then
+                savedSizes[hrp] = nil
+            end
+        end
     end
 end)
 
 -- ============ FOV ============
-RunService.RenderStepped:Connect(function()
+bind(RunService.RenderStepped, function()
     local cam = workspace.CurrentCamera
     if cam then
         if State.fov then cam.FieldOfView = Values.fov else cam.FieldOfView = 70 end
@@ -970,7 +966,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ============ Zoom ============
-RunService.RenderStepped:Connect(function()
+bind(RunService.RenderStepped, function()
     if State.zoom then LocalPlayer.CameraMaxZoomDistance = Values.zoom
     else LocalPlayer.CameraMaxZoomDistance = 400 end
 end)
@@ -979,7 +975,7 @@ end)
 local brightSaved = false
 local brightData = {}
 task.spawn(function()
-    while true do
+    while IsAlive do
         task.wait(0.5)
         if State.fullbright and not brightSaved then
             brightData.B = Lighting.Brightness; brightData.C = Lighting.ClockTime
@@ -1004,7 +1000,7 @@ end)
 -- ============ Auto Roll ============
 task.spawn(function()
     local lastRoll = 0
-    while true do
+    while IsAlive do
         task.wait(0.15)
         if State.autoRoll then
             local now = tick()
@@ -1033,7 +1029,7 @@ end)
 -- ============ Auto Collect ============
 task.spawn(function()
     local lastCollect = 0
-    while true do
+    while IsAlive do
         task.wait(0.3)
         if State.autoCollect then
             local now = tick()
@@ -1058,42 +1054,53 @@ task.spawn(function()
     end
 end)
 
--- ============ Auto Steal ============
+-- ============ Auto Steal (بدون Teleport + task.spawn للـ prompts) ============
 task.spawn(function()
-    while true do
+    while IsAlive do
         task.wait(Values.autoStealDelay)
         if State.autoSteal then
-            scanPlants()
-            if #Farm.plantParts > 0 then
-                local root = rt()
-                if root then
-                    local target = Farm.plantParts[1]
-                    local pos = target:IsA("BasePart") and target.Position or (target.PrimaryPart and target.PrimaryPart.Position)
+            local root = rt()
+            if not root then continue end
+            local myPos = root.Position
+
+            local closest, closestDist = nil, 60
+            for _, obj in ipairs(Farm.plantParts) do
+                if obj and obj.Parent then
+                    local pos = obj:IsA("BasePart") and obj.Position or (obj.PrimaryPart and obj.PrimaryPart.Position)
                     if pos then
-                        root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
-                        local h = hu()
-                        if h then
-                            for _, d in ipairs(target:GetDescendants()) do
-                                if d:IsA("ProximityPrompt") then
-                                    pcall(function()
-                                        d:InputHoldBegin()
-                                        task.wait(d.HoldDuration or 0)
-                                        d:InputHoldEnd()
-                                    end)
-                                end
-                            end
-                        end
-                        if Farm.guessedRemotes.steal then pcall(function() Farm.guessedRemotes.steal:FireServer(target) end) end
-                        if Farm.guessedRemotes.collectFruit then pcall(function() Farm.guessedRemotes.collectFruit:FireServer(target) end) end
+                        local d = (pos - myPos).Magnitude
+                        if d < closestDist then closest, closestDist = obj, d end
                     end
+                end
+            end
+
+            if closest then
+                -- ✅ كل prompt في task.spawn منفصل عشان ما يوقف اللوب
+                for _, d in ipairs(closest:GetDescendants()) do
+                    if d:IsA("ProximityPrompt") then
+                        task.spawn(function()
+                            pcall(function()
+                                d:InputHoldBegin()
+                                task.wait(math.min(d.HoldDuration or 0, 0.5))
+                                d:InputHoldEnd()
+                            end)
+                        end)
+                    end
+                end
+                if Farm.guessedRemotes.steal then
+                    pcall(function() Farm.guessedRemotes.steal:FireServer(closest) end)
+                end
+                if Farm.guessedRemotes.collectFruit then
+                    pcall(function() Farm.guessedRemotes.collectFruit:FireServer(closest) end)
                 end
             end
         end
     end
 end)
 
--- ============ ESP ============
+-- ============ ESP (مع تنظيف) ============
 local espBoxes = {}
+
 local function createESP(obj, color)
     if not obj or not obj.Parent or espBoxes[obj] then return end
     local adornee = obj:IsA("BasePart") and obj or obj.PrimaryPart
@@ -1101,22 +1108,44 @@ local function createESP(obj, color)
     local box = Instance.new("BoxHandleAdornment")
     box.Size = adornee.Size + Vector3.new(0.5, 0.5, 0.5)
     box.Adornee = adornee
-    box.AlwaysOnTop = true; box.ZIndex = 5
-    box.Transparency = 0.6; box.Color3 = color
+    box.AlwaysOnTop = true
+    box.ZIndex = 5
+    box.Transparency = 0.6
+    box.Color3 = color
     box.Parent = ScreenGui
     espBoxes[obj] = box
 end
+
 local function clearESP()
-    for _, box in pairs(espBoxes) do if box and box.Parent then box:Destroy() end end
+    for _, box in pairs(espBoxes) do
+        if box and box.Parent then box:Destroy() end
+    end
     espBoxes = {}
 end
+
+-- 🧹 تنظيف الكائنات الميتة
 task.spawn(function()
-    while true do
-        task.wait(0.8)
+    while IsAlive do
+        task.wait(1)
+        for obj, box in pairs(espBoxes) do
+            if not obj or not obj.Parent then
+                if box and box.Parent then box:Destroy() end
+                espBoxes[obj] = nil
+            end
+        end
+    end
+end)
+
+-- 🔄 تحديث ESP كل 2.5 ثانية
+task.spawn(function()
+    while IsAlive do
+        task.wait(2.5)
         if State.espPlants or State.espPlayers then
             if State.espPlants then
                 scanPlants()
-                for _, obj in ipairs(Farm.plantParts) do createESP(obj, Color3.fromRGB(0, 255, 100)) end
+                for _, obj in ipairs(Farm.plantParts) do
+                    createESP(obj, Color3.fromRGB(0, 255, 100))
+                end
             end
             if State.espPlayers then
                 for _, p in ipairs(Players:GetPlayers()) do
@@ -1137,14 +1166,31 @@ end)
 -- ================================================================================
 _G.KhalilCleanup = function()
     IsAlive = false
+
+    if LagState.enabled then pcall(disableLagReducer) end
+
     for _, c in ipairs(Connections) do pcall(function() c:Disconnect() end) end
     Connections = {}
-    if LagState.connections then for _, c in ipairs(LagState.connections) do pcall(function() c:Disconnect() end) end end
+
+    if LagState.connections then
+        for _, c in ipairs(LagState.connections) do pcall(function() c:Disconnect() end) end
+        LagState.connections = {}
+    end
+
+    pcall(clearESP)
+
+    pcall(function()
+        if bv then bv:Destroy() bv = nil end
+        if bg then bg:Destroy() bg = nil end
+        local h = hu()
+        if h then h.PlatformStand = false end
+    end)
+
     pcall(function() ScreenGui:Destroy() end)
 end
 
 print("═══════════════════════════════════════════════")
-print("🌱 سكربت خليل v4.0 شغال")
+print("🌱 سكربت خليل v4.0 شغال (نسخة نهائية ✅)")
 print("📡 Remotes: " .. #Farm.remotes)
 print("🖥️ أزرار: " .. #Farm.buttons)
 print("🌱 نباتات: " .. #Farm.plantParts)
