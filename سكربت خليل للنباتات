@@ -1,808 +1,1158 @@
--- ═══════════════════════════════════════════════════════════
--- 🌱 سكربت خليل للنباتات v2.0 | Khalil Plant Farmer
--- 🎮 Build a Base & Steal Plants (Game ID: 93801483388308)
--- ═══════════════════════════════════════════════════════════
+-- ================================================================================
+-- 🌱 سكربت خليل | Khalil Script - واجهة كاملة + ميزات شغالة
+-- ================================================================================
 
 local Players = game:GetService("Players")
-local RS = game:GetService("RunService")
-local UIS = game:GetService("UserInputService")
-local HS = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local plr = Players.LocalPlayer
+local Lighting = game:GetService("Lighting")
 
-local function ch() return plr.Character end
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do task.wait(0.1) LocalPlayer = Players.LocalPlayer end
+
+if _G.KhalilCleanup then pcall(function() _G.KhalilCleanup() end) end
+
+local Connections = {}
+local function bind(signal, callback)
+    local conn = signal:Connect(callback)
+    table.insert(Connections, conn)
+    return conn
+end
+
+pcall(function()
+    local oldGui = game.CoreGui:FindFirstChild("KhalilScript")
+    if oldGui then oldGui:Destroy() end
+end)
+
+-- ================================================================================
+-- الحالة والقيم
+-- ================================================================================
+local State = {
+    fly = false, infJump = false, speed = false, jump = false,
+    god = false, hitbox = false, fov = false, zoom = false,
+    freecam = false, noshake = false, fullbright = false,
+    noclip = false, autoRoll = false, autoCollect = false,
+    autoSteal = false, espPlants = false, espPlayers = false
+}
+
+local Values = {
+    speed = 16, jumpPower = 50, hitboxSize = 5,
+    fov = 70, zoom = 400, uiScale = 1.0, uiTransparency = 0,
+    flySpeed = 80, autoRollDelay = 0.4, autoCollectDelay = 0.5,
+    autoStealDelay = 0.6
+}
+
+local IsMinimized = false
+local IsAlive = true
+local SAVE_FILE = "KhalilSettings.json"
+local CanSave = (writefile and readfile and isfile and delfile) and true or false
+local UISetters = {}
+
+-- ================================================================================
+-- Helpers عامة
+-- ================================================================================
+local function getSafeParent()
+    if gethui then
+        local ok, res = pcall(gethui)
+        if ok and res then return res end
+    end
+    local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+    if ok and cg then return cg end
+    return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local function ch() return LocalPlayer.Character end
 local function hu() local c = ch() return c and c:FindFirstChildOfClass("Humanoid") end
 local function rt() local c = ch() return c and c:FindFirstChild("HumanoidRootPart") end
-local function dist(a, b) return (a - b).Magnitude end
+local function dist3(a, b) return (a - b).Magnitude end
 
--- ═══════════════════════════════════════════════════════════
--- 1) الإعدادات + الحفظ
--- ═══════════════════════════════════════════════════════════
-local CONFIG = "KhalilFarm.json"
-local DEFAULTS = {
-	speed = 80,
-	hideKey = "RightShift",
-	autoRollDelay = 0.3,
-	autoCollectDelay = 0.5,
-	autoStealDelay = 0.8,
-	stealRange = 400,
-	tpSmooth = true,
-}
-
-local function clone(t) local r = {} for k, v in pairs(t) do r[k] = v end return r end
-
-local function loadCfg()
-	local fb = clone(DEFAULTS)
-	if not (writefile and readfile and isfile) then return fb end
-	if not isfile(CONFIG) then return fb end
-	local ok, data = pcall(function() return HS:JSONDecode(readfile(CONFIG)) end)
-	if ok and type(data) == "table" then
-		for k, v in pairs(DEFAULTS) do if data[k] == nil then data[k] = v end end
-		return data
-	end
-	return fb
-end
-
-local cfg = loadCfg()
-
-local function saveCfg()
-	if not writefile then return end
-	pcall(function() writefile(CONFIG, HS:JSONEncode(cfg)) end)
-end
-
--- ═══════════════════════════════════════════════════════════
--- 2) الحالة
--- ═══════════════════════════════════════════════════════════
-local S = {
-	noclip = false,
-	fly = false,
-	autoRoll = false,
-	autoCollect = false,
-	autoSteal = false,
-	espPlants = false,
-	espPlayers = false,
-	espPets = false,
-}
-
-local flyUp, flyDown = false, false
-local FLY_SPEED = cfg.speed
-local bv, bg
-local hideKey = Enum.KeyCode[cfg.hideKey] or Enum.KeyCode.RightShift
-local savedCollide = {}
-local watchedChars = setmetatable({}, { __mode = "k" })
-local espBoxes = {}
-
--- ═══════════════════════════════════════════════════════════
--- 3) اكتشاف الـ Remotes
--- ═══════════════════════════════════════════════════════════
-local Remotes = { folder = nil, list = {}, searchDone = false }
+-- ================================================================================
+-- اكتشاف Remotes
+-- ================================================================================
+local Remotes = { list = {}, collectFruit = nil, roll = nil, steal = nil }
 
 local function scanRemotes()
-	Remotes.list = {}
-	Remotes.searchDone = true
-	local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
-
-	if remotesFolder then
-		for _, v in ipairs(remotesFolder:GetDescendants()) do
-			if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
-				local low = v.Name:lower()
-				Remotes.list[v.Name] = v
-				-- تصنيف
-				if low:find("collectfruit") or low:find("fruitpickup") then
-					Remotes.collectFruit = v
-				elseif low:find("roll") or low:find("spin") then
-					Remotes.roll = v
-				elseif low:find("steal") or low:find("take") then
-					Remotes.steal = v
-				elseif low:find("collect") and low:find("toggle") then
-					Remotes.autoCollectToggle = v
-				elseif low:find("plant") and low:find("place") then
-					Remotes.plantPlace = v
-				end
-			end
-		end
-	end
-	return Remotes
+    Remotes.list = {}
+    Remotes.collectFruit = nil
+    Remotes.roll = nil
+    Remotes.steal = nil
+    local folder = ReplicatedStorage:FindFirstChild("Remotes")
+    if folder then
+        for _, v in ipairs(folder:GetDescendants()) do
+            if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
+                Remotes.list[v.Name] = v
+                local low = v.Name:lower()
+                if low:find("collectfruit") or low:find("fruitpickup") then
+                    Remotes.collectFruit = v
+                elseif low:find("roll") or low:find("spin") then
+                    Remotes.roll = Remotes.roll or v
+                elseif low:find("steal") or low:find("take") then
+                    Remotes.steal = Remotes.steal or v
+                end
+            end
+        end
+    end
 end
-
 scanRemotes()
 
--- ═══════════════════════════════════════════════════════════
--- 4) الواجهة
--- ═══════════════════════════════════════════════════════════
-local parent = (gethui and gethui()) or plr:WaitForChild("PlayerGui")
+-- ================================================================================
+-- الألوان والمساعدات
+-- ================================================================================
+local Colors = {
+    Navy = Color3.fromRGB(7, 12, 30),
+    Panel = Color3.fromRGB(10, 18, 40),
+    Blue = Color3.fromRGB(0, 140, 255),
+    Green = Color3.fromRGB(0, 220, 100),
+    Purple = Color3.fromRGB(150, 60, 255),
+    Red = Color3.fromRGB(255, 40, 70),
+    Cyan = Color3.fromRGB(0, 200, 255),
+    Orange = Color3.fromRGB(255, 170, 0),
+    White = Color3.new(1, 1, 1),
+    Black = Color3.fromRGB(0, 0, 0)
+}
 
-local g = Instance.new("ScreenGui")
-g.Name = "KhalilFarm"
-g.ResetOnSpawn = false
-g.IgnoreGuiInset = true
-g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-g.Parent = parent
-
-local main = Instance.new("Frame", g)
-main.Size = UDim2.fromOffset(340, 450)
-main.Position = UDim2.new(0.5, -170, 0.5, -225)
-main.BackgroundColor3 = Color3.fromRGB(7, 12, 30)
-main.BorderSizePixel = 0
-main.Active = true
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 15)
-
-local stroke = Instance.new("UIStroke", main)
-stroke.Color = Color3.fromRGB(0, 200, 100)
-stroke.Thickness = 2
-
-local title = Instance.new("TextLabel", main)
-title.Size = UDim2.new(1, 0, 0, 35)
-title.Position = UDim2.fromOffset(0, 5)
-title.BackgroundTransparency = 1
-title.Text = "🌱 خليل فارم v2.0"
-title.TextColor3 = Color3.fromRGB(120, 255, 150)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 20
-title.Active = true
-
-local statusLabel = Instance.new("TextLabel", main)
-statusLabel.Size = UDim2.new(1, -20, 0, 18)
-statusLabel.Position = UDim2.fromOffset(10, 38)
-statusLabel.BackgroundTransparency = 1
-statusLabel.Text = "⚪ جاهز — Remotes: " .. tostring(#Remotes.list ~= 0 and "تم" or "لم يتم")
-statusLabel.TextColor3 = Color3.fromRGB(180, 220, 255)
-statusLabel.Font = Enum.Font.Gotham
-statusLabel.TextSize = 11
-statusLabel.TextXAlignment = Enum.TextXAlignment.Left
-
--- flyBtns (قبل mkBtn)
-local flyBtns = Instance.new("Frame", g)
-flyBtns.Size = UDim2.fromOffset(60, 130)
-flyBtns.Position = UDim2.new(1, -80, 0.5, -65)
-flyBtns.BackgroundTransparency = 1
-flyBtns.Visible = false
-
-local function mkFlyBtn(txt, y, isUp)
-	local b = Instance.new("TextButton", flyBtns)
-	b.Size = UDim2.fromOffset(60, 60)
-	b.Position = UDim2.fromOffset(0, y)
-	b.BackgroundColor3 = Color3.fromRGB(0, 220, 100)
-	b.BackgroundTransparency = 0.2
-	b.Text = txt
-	b.TextColor3 = Color3.new(1, 1, 1)
-	b.Font = Enum.Font.GothamBold
-	b.TextSize = 26
-	b.BorderSizePixel = 0
-	b.AutoButtonColor = false
-	Instance.new("UICorner", b).CornerRadius = UDim.new(1, 0)
-
-	local function press() if isUp then flyUp = true else flyDown = true end end
-	local function release() if isUp then flyUp = false else flyDown = false end end
-
-	b.InputBegan:Connect(function(i)
-		if i.UserInputType == Enum.UserInputType.Touch
-		or i.UserInputType == Enum.UserInputType.MouseButton1 then press() end
-	end)
-	b.InputEnded:Connect(function(i)
-		if i.UserInputType == Enum.UserInputType.Touch
-		or i.UserInputType == Enum.UserInputType.MouseButton1 then release() end
-	end)
-	b.MouseLeave:Connect(release)
+local function addCorner(p, r) local c = Instance.new("UICorner", p) c.CornerRadius = r or UDim.new(0, 10) return c end
+local function addStroke(p, col, t)
+    local s = Instance.new("UIStroke", p)
+    s.Color = col; s.Thickness = t or 2
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    return s
 end
-mkFlyBtn("▲", 0, true)
-mkFlyBtn("▼", 70, false)
-
--- دالة إنشاء زر
-local function mkBtn(y, txt, color, cb)
-	local b = Instance.new("TextButton", main)
-	b.Size = UDim2.new(1, -30, 0, 32)
-	b.Position = UDim2.fromOffset(15, y)
-	b.BackgroundColor3 = Color3.fromRGB(11, 16, 36)
-	b.Text = txt
-	b.TextColor3 = color
-	b.Font = Enum.Font.GothamBold
-	b.TextSize = 14
-	b.BorderSizePixel = 0
-	b.AutoButtonColor = false
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-	local s = Instance.new("UIStroke", b)
-	s.Color = color
-	s.Thickness = 1.5
-
-	local on = false
-	b.MouseButton1Click:Connect(function()
-		on = not on
-		b.BackgroundColor3 = on and color or Color3.fromRGB(11, 16, 36)
-		b.TextColor3 = on and Color3.fromRGB(0, 0, 0) or color
-		cb(on)
-	end)
-	return b
+local function createFrame(p, pos, size, bg)
+    local f = Instance.new("Frame", p)
+    f.Position = pos; f.Size = size
+    if bg then f.BackgroundColor3 = bg else f.BackgroundTransparency = 1 end
+    f.BorderSizePixel = 0
+    return f
+end
+local function createLabel(p, text, sz, pos, size, col)
+    local l = Instance.new("TextLabel", p)
+    l.BackgroundTransparency = 1; l.Text = text
+    l.Font = Enum.Font.GothamBold; l.TextSize = sz
+    l.TextColor3 = col or Colors.White
+    l.Position = pos; l.Size = size; l.BorderSizePixel = 0
+    return l
+end
+local function createButton(p, text, sz, pos, size, bg, col)
+    local b = Instance.new("TextButton", p)
+    b.Text = text; b.Font = Enum.Font.GothamBold; b.TextSize = sz
+    b.TextColor3 = col or Colors.White
+    b.BackgroundColor3 = bg or Colors.Panel
+    b.AutoButtonColor = true; b.BorderSizePixel = 0
+    b.Position = pos; b.Size = size
+    return b
+end
+local function createTextBox(p, text, sz, pos, size, bg, borderCol)
+    local tb = Instance.new("TextBox", p)
+    tb.Position = pos; tb.Size = size
+    tb.BackgroundColor3 = bg or Color3.fromRGB(6, 12, 30)
+    tb.BorderSizePixel = 0; tb.Font = Enum.Font.GothamBold
+    tb.TextSize = sz or 16; tb.TextColor3 = Colors.White
+    tb.Text = text or ""; tb.ClearTextOnFocus = false
+    addCorner(tb, UDim.new(0, 8))
+    if borderCol then addStroke(tb, borderCol, 1.5) end
+    return tb
 end
 
--- ═══════════════════════════════════════════════════════════
--- 5) Noclip
--- ═══════════════════════════════════════════════════════════
-local function applyNoclip(c)
-	if not c then return end
-	for _, p in ipairs(c:GetDescendants()) do
-		if p:IsA("BasePart") then
-			if savedCollide[p] == nil then savedCollide[p] = p.CanCollide end
-			p.CanCollide = false
-		end
-	end
+-- ================================================================================
+-- الواجهة الأساسية
+-- ================================================================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "KhalilScript"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.Parent = getSafeParent()
+
+local MainFrame = createFrame(ScreenGui, UDim2.new(0.5, 0, 0.5, 0), UDim2.fromOffset(500, 440), Colors.Navy)
+MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+MainFrame.Active = false
+addCorner(MainFrame, UDim.new(0, 18))
+addStroke(MainFrame, Colors.Blue, 3)
+
+local MainGradient = Instance.new("UIGradient", MainFrame)
+MainGradient.Rotation = 90
+MainGradient.Color = ColorSequence.new(Color3.fromRGB(12, 22, 52), Color3.fromRGB(5, 9, 24))
+
+local UIScaleInstance = Instance.new("UIScale", MainFrame)
+
+local DragBar = createFrame(MainFrame, UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 80))
+DragBar.Active = true
+
+do
+    local dragging = false
+    local dragStart, startPos
+    DragBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+        or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = MainFrame.Position
+        end
+    end)
+    bind(UserInputService.InputChanged, function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.Touch
+        or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            local delta = input.Position - dragStart
+            MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    bind(UserInputService.InputEnded, function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+        or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
 end
 
+local Crown = createLabel(MainFrame, "👑", 46, UDim2.new(0.5, -30, 0, -38), UDim2.fromOffset(60, 50), Color3.fromRGB(80, 190, 255))
+Crown.ZIndex = 5
+createLabel(MainFrame, "سكربت خليل", 36, UDim2.new(0, 130, 0, 14), UDim2.fromOffset(330, 50), Color3.fromRGB(190, 235, 255))
+createLabel(MainFrame, "كل ما تحتاجه في مكان واحد", 15, UDim2.new(0, 130, 0, 62), UDim2.fromOffset(330, 22), Colors.Cyan)
+
+local CloseButton = createButton(MainFrame, "✕", 22, UDim2.new(1, -54, 0, 14), UDim2.fromOffset(40, 40), Color3.fromRGB(12, 22, 52))
+addCorner(CloseButton, UDim.new(0, 12))
+addStroke(CloseButton, Colors.Blue, 2)
+
+local MinimizeButton = createButton(MainFrame, "-", 22, UDim2.new(1, -100, 0, 14), UDim2.fromOffset(40, 40), Color3.fromRGB(12, 22, 52))
+addCorner(MinimizeButton, UDim.new(0, 12))
+addStroke(MinimizeButton, Colors.Blue, 2)
+
+local AvatarImage = ""
+pcall(function()
+    AvatarImage = Players:GetUserThumbnailAsync(LocalPlayer.UserId,
+        Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+end)
+
+local AvatarFrame = createFrame(MainFrame, UDim2.fromOffset(16, 20), UDim2.fromOffset(92, 92), Color3.fromRGB(20, 30, 60))
+addCorner(AvatarFrame, UDim.new(1, 0))
+addStroke(AvatarFrame, Colors.Cyan, 3)
+local AvatarImageLabel = Instance.new("ImageLabel", AvatarFrame)
+AvatarImageLabel.Size = UDim2.fromScale(1, 1)
+AvatarImageLabel.BackgroundTransparency = 1
+AvatarImageLabel.Image = AvatarImage
+AvatarImageLabel.BorderSizePixel = 0
+addCorner(AvatarImageLabel, UDim.new(1, 0))
+
+local Signature = createLabel(MainFrame, "By 👑\nخليل!", 20, UDim2.fromOffset(12, 366), UDim2.fromOffset(100, 68), Colors.Cyan)
+Signature.Font = Enum.Font.SourceSansItalic
+Signature.TextWrapped = true
+
+local ContentPanel = createFrame(MainFrame, UDim2.fromOffset(122, 96), UDim2.new(1, -134, 1, -110), Colors.Panel)
+addCorner(ContentPanel, UDim.new(0, 14))
+addStroke(ContentPanel, Colors.Blue, 2)
+
+local function makeScrollPage()
+    local sp = Instance.new("ScrollingFrame", ContentPanel)
+    sp.BackgroundTransparency = 1; sp.BorderSizePixel = 0
+    sp.Size = UDim2.fromScale(1, 1); sp.ScrollBarThickness = 4
+    sp.Active = true; sp.CanvasSize = UDim2.new(0, 0, 0, 0)
+    sp.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    sp.Visible = false
+    local lay = Instance.new("UIListLayout", sp)
+    lay.Padding = UDim.new(0, 6)
+    lay.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    lay.SortOrder = Enum.SortOrder.LayoutOrder
+    local pad = Instance.new("UIPadding", sp)
+    pad.PaddingTop = UDim.new(0, 8)
+    pad.PaddingBottom = UDim.new(0, 8)
+    return sp
+end
+
+local HomePage = makeScrollPage()
+local SettingsPage = makeScrollPage()
+local InfoPage = makeScrollPage()
+local FarmPage = makeScrollPage()
+
+local orderCounter = 0
+local function nextOrder() orderCounter = orderCounter + 1 return orderCounter end
+
+local function makeRow(page, h, color, icon, name)
+    local hh = math.min(h, 48)
+    local row = createFrame(page, UDim2.fromOffset(0, 0), UDim2.new(1, -20, 0, h), Color3.fromRGB(11, 16, 36))
+    row.LayoutOrder = nextOrder()
+    addCorner(row, UDim.new(0, 12))
+    addStroke(row, color, 2)
+    createLabel(row, icon, 26, UDim2.fromOffset(10, 0), UDim2.fromOffset(50, hh))
+    local nl = createLabel(row, name, 18, UDim2.new(0, 64, 0, 0), UDim2.new(1, -140, 0, hh))
+    nl.TextWrapped = true
+    return row, nl
+end
+
+local function makeSwitch(row, color, callback, initial)
+    local hh = math.min(row.Size.Y.Offset, 48)
+    local offColor = Color3.fromRGB(60, 60, 75)
+    local sw = createButton(row, "", 14, UDim2.new(1, -70, 0, (hh - 30) / 2), UDim2.fromOffset(58, 30), offColor)
+    sw.AutoButtonColor = false
+    addCorner(sw, UDim.new(1, 0))
+    local knob = createFrame(sw, UDim2.new(0, 3, 0.5, -12), UDim2.fromOffset(24, 24), Colors.White)
+    addCorner(knob, UDim.new(1, 0))
+    local isOn = false
+    if initial then
+        isOn = true; sw.BackgroundColor3 = color
+        knob.Position = UDim2.new(1, -27, 0.5, -12)
+    end
+    local function apply(v)
+        isOn = v
+        sw.BackgroundColor3 = isOn and color or offColor
+        knob:TweenPosition(isOn and UDim2.new(1, -27, 0.5, -12) or UDim2.new(0, 3, 0.5, -12), "Out", "Quad", 0.15, true)
+        if callback then callback(isOn) end
+    end
+    sw.MouseButton1Click:Connect(function() apply(not isOn) end)
+    return function(v) if v ~= isOn then apply(v) end end
+end
+
+-- ================================================================================
+-- تبويب الرئيسية - الميزات العامة
+-- ================================================================================
+UISetters["fly"] = makeSwitch(makeRow(HomePage, 48, Colors.Green, "🪽", "الطيران"), Colors.Green, function(on) State.fly = on end)
+UISetters["infJump"] = makeSwitch(makeRow(HomePage, 48, Colors.Purple, "♾️", "قفز لا نهائي"), Colors.Purple, function(on) State.infJump = on end)
+
+-- السرعة
+local SpeedRow = makeRow(HomePage, 92, Colors.Red, "🏃", "السرعة")
+UISetters["speed"] = makeSwitch(SpeedRow, Colors.Red, function(on) State.speed = on end)
+createFrame(SpeedRow, UDim2.fromOffset(0, 48), UDim2.new(1, 0, 0, 2), Colors.Red)
+local SpeedMinus = createButton(SpeedRow, "−", 24, UDim2.fromOffset(10, 54), UDim2.fromOffset(38, 32), Color3.fromRGB(12, 22, 52))
+addCorner(SpeedMinus, UDim.new(0, 8)); addStroke(SpeedMinus, Colors.Blue, 2)
+local SpeedPlus = createButton(SpeedRow, "+", 24, UDim2.fromOffset(236, 54), UDim2.fromOffset(38, 32), Color3.fromRGB(12, 22, 52))
+addCorner(SpeedPlus, UDim.new(0, 8)); addStroke(SpeedPlus, Colors.Blue, 2)
+local SpeedInput = createTextBox(SpeedRow, "16", 20, UDim2.fromOffset(282, 54), UDim2.fromOffset(52, 32), Color3.fromRGB(11, 16, 36), Colors.Red)
+local SpeedHit = createFrame(SpeedRow, UDim2.fromOffset(56, 54), UDim2.fromOffset(172, 24))
+SpeedHit.Active = true
+local SpeedBar = createFrame(SpeedHit, UDim2.new(0, 0, 0.5, -3), UDim2.new(1, 0, 0, 6), Color3.fromRGB(30, 50, 100))
+addCorner(SpeedBar, UDim.new(1, 0))
+local SpeedFill = createFrame(SpeedBar, UDim2.fromScale(0, 0), UDim2.fromScale(0, 1), Colors.Blue)
+addCorner(SpeedFill, UDim.new(1, 0))
+local SpeedHandle = createFrame(SpeedBar, UDim2.new(0, -9, 0.5, -9), UDim2.fromOffset(18, 18), Colors.White)
+addCorner(SpeedHandle, UDim.new(1, 0))
+createLabel(SpeedRow, "16", 12, UDim2.fromOffset(56, 72), UDim2.fromOffset(30, 14), Color3.fromRGB(200, 220, 255)).TextXAlignment = Enum.TextXAlignment.Left
+createLabel(SpeedRow, "200", 12, UDim2.fromOffset(198, 72), UDim2.fromOffset(30, 14), Color3.fromRGB(200, 220, 255)).TextXAlignment = Enum.TextXAlignment.Right
+
+local function setSpeed(v, isManual)
+    if isManual then Values.speed = math.clamp(math.floor(v + 0.5), 16, 10000)
+    else Values.speed = math.clamp(math.floor(v + 0.5), 16, 200) end
+    local a = math.clamp((Values.speed - 16) / 184, 0, 1)
+    SpeedFill.Size = UDim2.new(a, 0, 1, 0)
+    SpeedHandle.Position = UDim2.new(a, -9, 0.5, -9)
+    SpeedInput.Text = tostring(Values.speed)
+end
+setSpeed(Values.speed, false)
+SpeedInput.FocusLost:Connect(function() setSpeed(tonumber(SpeedInput.Text) or Values.speed, true) end)
+SpeedMinus.MouseButton1Click:Connect(function() setSpeed(Values.speed - 1, false) end)
+SpeedPlus.MouseButton1Click:Connect(function() setSpeed(Values.speed + 1, false) end)
+local speedDragging = false
+local function speedFromX(x)
+    setSpeed(16 + math.clamp((x - SpeedHit.AbsolutePosition.X) / SpeedHit.AbsoluteSize.X, 0, 1) * 184, false)
+end
+SpeedHit.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        speedDragging = true; speedFromX(i.Position.X)
+    end
+end)
+bind(UserInputService.InputChanged, function(i)
+    if speedDragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+        speedFromX(i.Position.X)
+    end
+end)
+bind(UserInputService.InputEnded, function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        speedDragging = false
+    end
+end)
+
+-- القفز
+local JumpRow = makeRow(HomePage, 48, Colors.Green, "🦘", "قوة القفز")
+local JumpInput = createTextBox(JumpRow, tostring(Values.jumpPower), 16, UDim2.new(1, -140, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(6, 12, 30), Colors.Green)
+UISetters["jump"] = makeSwitch(JumpRow, Colors.Green, function(on) State.jump = on end)
+JumpInput.FocusLost:Connect(function()
+    local n = tonumber(JumpInput.Text)
+    if n then Values.jumpPower = math.clamp(n, 50, 500) end
+    JumpInput.Text = tostring(Values.jumpPower)
+end)
+
+UISetters["god"] = makeSwitch(makeRow(HomePage, 48, Colors.Green, "🛡️", "عدم الموت"), Colors.Green, function(on) State.god = on end)
+
+-- الهيتبوكس
+local HitboxRow = makeRow(HomePage, 92, Colors.Orange, "👹", "هيتبوكس عملاق للاعبين")
+UISetters["hitbox"] = makeSwitch(HitboxRow, Colors.Orange, function(on) State.hitbox = on end)
+createFrame(HitboxRow, UDim2.fromOffset(0, 48), UDim2.new(1, 0, 0, 2), Colors.Orange)
+local HitboxMinus = createButton(HitboxRow, "−", 24, UDim2.fromOffset(10, 54), UDim2.fromOffset(38, 32), Color3.fromRGB(12, 22, 52))
+addCorner(HitboxMinus, UDim.new(0, 8)); addStroke(HitboxMinus, Colors.Orange, 2)
+local HitboxPlus = createButton(HitboxRow, "+", 24, UDim2.fromOffset(236, 54), UDim2.fromOffset(38, 32), Color3.fromRGB(12, 22, 52))
+addCorner(HitboxPlus, UDim.new(0, 8)); addStroke(HitboxPlus, Colors.Orange, 2)
+local HitboxInput = createTextBox(HitboxRow, tostring(Values.hitboxSize), 20, UDim2.fromOffset(282, 54), UDim2.fromOffset(52, 32), Color3.fromRGB(11, 16, 36), Colors.Orange)
+local HitboxHit = createFrame(HitboxRow, UDim2.fromOffset(56, 54), UDim2.fromOffset(172, 24))
+HitboxHit.Active = true
+local HitboxBar = createFrame(HitboxHit, UDim2.new(0, 0, 0.5, -3), UDim2.new(1, 0, 0, 6), Color3.fromRGB(30, 50, 100))
+addCorner(HitboxBar, UDim.new(1, 0))
+local HitboxFill = createFrame(HitboxBar, UDim2.fromScale(0, 0), UDim2.fromScale(0, 1), Colors.Orange)
+addCorner(HitboxFill, UDim.new(1, 0))
+local HitboxHandle = createFrame(HitboxBar, UDim2.new(0, -9, 0.5, -9), UDim2.fromOffset(18, 18), Colors.White)
+addCorner(HitboxHandle, UDim.new(1, 0))
+createLabel(HitboxRow, "1", 12, UDim2.fromOffset(56, 72), UDim2.fromOffset(30, 14), Color3.fromRGB(200, 220, 255)).TextXAlignment = Enum.TextXAlignment.Left
+createLabel(HitboxRow, "50", 12, UDim2.fromOffset(198, 72), UDim2.fromOffset(30, 14), Color3.fromRGB(200, 220, 255)).TextXAlignment = Enum.TextXAlignment.Right
+
+local function setHitboxValue(v, isManual)
+    if isManual then Values.hitboxSize = math.clamp(math.floor(v + 0.5), 1, 100)
+    else Values.hitboxSize = math.clamp(math.floor(v + 0.5), 1, 50) end
+    local a = math.clamp((Values.hitboxSize - 1) / 49, 0, 1)
+    HitboxFill.Size = UDim2.new(a, 0, 1, 0)
+    HitboxHandle.Position = UDim2.new(a, -9, 0.5, -9)
+    HitboxInput.Text = tostring(Values.hitboxSize)
+end
+setHitboxValue(Values.hitboxSize, false)
+HitboxInput.FocusLost:Connect(function() setHitboxValue(tonumber(HitboxInput.Text) or Values.hitboxSize, true) end)
+HitboxMinus.MouseButton1Click:Connect(function() setHitboxValue(Values.hitboxSize - 1, false) end)
+HitboxPlus.MouseButton1Click:Connect(function() setHitboxValue(Values.hitboxSize + 1, false) end)
+local hitboxDragging = false
+local function hitboxFromX(x)
+    setHitboxValue(1 + math.clamp((x - HitboxHit.AbsolutePosition.X) / HitboxHit.AbsoluteSize.X, 0, 1) * 49, false)
+end
+HitboxHit.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        hitboxDragging = true; hitboxFromX(i.Position.X)
+    end
+end)
+bind(UserInputService.InputChanged, function(i)
+    if hitboxDragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+        hitboxFromX(i.Position.X)
+    end
+end)
+bind(UserInputService.InputEnded, function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        hitboxDragging = false
+    end
+end)
+
+-- FOV
+local FOVRow = makeRow(HomePage, 48, Colors.Blue, "🔭", "زاوية الرؤية")
+local FOVInput = createTextBox(FOVRow, tostring(Values.fov), 16, UDim2.new(1, -140, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(6, 12, 30), Colors.Blue)
+UISetters["fov"] = makeSwitch(FOVRow, Colors.Blue, function(on) State.fov = on end)
+FOVInput.FocusLost:Connect(function()
+    local n = tonumber(FOVInput.Text)
+    if n then Values.fov = math.clamp(n, 50, 120) end
+    FOVInput.Text = tostring(Values.fov)
+end)
+
+-- Zoom
+local ZoomRow = makeRow(HomePage, 48, Colors.Cyan, "🔍", "تكبير مفتوح")
+local ZoomInput = createTextBox(ZoomRow, tostring(Values.zoom), 16, UDim2.new(1, -140, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(6, 12, 30), Colors.Cyan)
+UISetters["zoom"] = makeSwitch(ZoomRow, Colors.Cyan, function(on) State.zoom = on end)
+ZoomInput.FocusLost:Connect(function()
+    local n = tonumber(ZoomInput.Text)
+    if n then Values.zoom = math.clamp(n, 20, 2000) end
+    ZoomInput.Text = tostring(Values.zoom)
+end)
+
+UISetters["freecam"] = makeSwitch(makeRow(HomePage, 48, Colors.Purple, "🎬", "كاميرا حرة"), Colors.Purple, function(on) State.freecam = on end)
+UISetters["noshake"] = makeSwitch(makeRow(HomePage, 48, Colors.Cyan, "📳", "منع اهتزاز الكاميرا"), Colors.Cyan, function(on) State.noshake = on end)
+UISetters["fullbright"] = makeSwitch(makeRow(HomePage, 48, Colors.Orange, "☀️", "إضاءة كاملة"), Colors.Orange, function(on) State.fullbright = on end)
+
+-- ================================================================================
+-- تبويب الزراعة 🌱
+-- ================================================================================
+UISetters["noclip"] = makeSwitch(makeRow(FarmPage, 48, Colors.Blue, "🧱", "عبور الجدران"), Colors.Blue, function(on)
+    State.noclip = on
+    if not on then
+        -- استرجاع
+        local c = ch()
+        if c then
+            for _, p in ipairs(c:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide = true end
+            end
+        end
+    end
+end)
+
+UISetters["autoRoll"] = makeSwitch(makeRow(FarmPage, 48, Colors.Orange, "🎲", "Roll تلقائي"), Colors.Orange, function(on) State.autoRoll = on end)
+
+UISetters["autoCollect"] = makeSwitch(makeRow(FarmPage, 48, Colors.Green, "💰", "جمع المال تلقائي"), Colors.Green, function(on) State.autoCollect = on end)
+
+UISetters["autoSteal"] = makeSwitch(makeRow(FarmPage, 48, Color3.fromRGB(255, 100, 200), "🌱", "سرقة تلقائية"), Color3.fromRGB(255, 100, 200), function(on) State.autoSteal = on end)
+
+UISetters["espPlants"] = makeSwitch(makeRow(FarmPage, 48, Color3.fromRGB(0, 255, 100), "🌿", "ESP النباتات"), Color3.fromRGB(0, 255, 100), function(on) State.espPlants = on end)
+
+UISetters["espPlayers"] = makeSwitch(makeRow(FarmPage, 48, Color3.fromRGB(255, 100, 100), "👥", "ESP اللاعبين"), Color3.fromRGB(255, 100, 100), function(on) State.espPlayers = on end)
+
+-- زر إعادة فحص Remotes
+local ScanRow = makeRow(FarmPage, 60, Colors.Purple, "🔄", "إعادة فحص Remotes")
+local ScanBtn = createButton(ScanRow, "فحص", 14, UDim2.new(1, -90, 0, 15), UDim2.fromOffset(70, 30), Color3.fromRGB(50, 20, 90))
+addCorner(ScanBtn, UDim.new(0, 8)); addStroke(ScanBtn, Colors.Purple, 2)
+ScanBtn.MouseButton1Click:Connect(function()
+    scanRemotes()
+    local count = 0
+    for _ in pairs(Remotes.list) do count = count + 1 end
+    ScanBtn.Text = "✓ " .. count
+    task.delay(2, function()
+        if ScanBtn and ScanBtn.Parent then ScanBtn.Text = "فحص" end
+    end)
+    print("═══ Remotes المكتشفة ═══")
+    for name, _ in pairs(Remotes.list) do print("  •", name) end
+end)
+
+-- ================================================================================
+-- تبويب الإعدادات
+-- ================================================================================
+local ScaleRow = makeRow(SettingsPage, 100, Colors.Blue, "📐", "حجم القائمة")
+local ScaleLabel = createLabel(ScaleRow, "100%", 20, UDim2.new(0.5, -35, 0, 56), UDim2.fromOffset(70, 34))
+local function setScale(v)
+    Values.uiScale = math.clamp(math.floor(v * 10 + 0.5) / 10, 0.6, 1.4)
+    UIScaleInstance.Scale = Values.uiScale
+    ScaleLabel.Text = math.floor(Values.uiScale * 100 + 0.5) .. "%"
+end
+local ScaleMinusBtn = createButton(ScaleRow, "−", 24, UDim2.new(0.5, -100, 0, 56), UDim2.fromOffset(44, 34), Color3.fromRGB(12, 22, 52))
+addCorner(ScaleMinusBtn, UDim.new(0, 8)); addStroke(ScaleMinusBtn, Colors.Blue, 2)
+ScaleMinusBtn.MouseButton1Click:Connect(function() setScale(Values.uiScale - 0.1) end)
+local ScalePlusBtn = createButton(ScaleRow, "+", 24, UDim2.new(0.5, 56, 0, 56), UDim2.fromOffset(44, 34), Color3.fromRGB(12, 22, 52))
+addCorner(ScalePlusBtn, UDim.new(0, 8)); addStroke(ScalePlusBtn, Colors.Blue, 2)
+ScalePlusBtn.MouseButton1Click:Connect(function() setScale(Values.uiScale + 0.1) end)
+
+local TranspRow = makeRow(SettingsPage, 48, Colors.Cyan, "💧", "شفافية الواجهة")
+local TranspInput = createTextBox(TranspRow, tostring(Values.uiTransparency), 16, UDim2.new(1, -70, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(6, 12, 30), Colors.Cyan)
+TranspInput.FocusLost:Connect(function()
+    local n = tonumber(TranspInput.Text)
+    if n then
+        Values.uiTransparency = math.clamp(n, 0, 90) / 100
+        MainFrame.BackgroundTransparency = Values.uiTransparency
+    end
+    TranspInput.Text = tostring(math.floor(Values.uiTransparency * 100))
+end)
+
+local SaveRow = makeRow(SettingsPage, 48, Colors.Green, "💾", "حفظ الإعدادات")
+local SaveStatusLabel = createLabel(SaveRow, "اضغط حفظ أو استرجاع", 12, UDim2.new(1, -130, 0, 0), UDim2.fromOffset(120, 48), Color3.fromRGB(200, 200, 200))
+SaveStatusLabel.TextXAlignment = Enum.TextXAlignment.Right
+local SaveBtn = createButton(SaveRow, "حفظ", 14, UDim2.fromOffset(10, 9), UDim2.fromOffset(60, 30), Color3.fromRGB(18, 100, 50))
+addCorner(SaveBtn, UDim.new(0, 8))
+local LoadBtn = createButton(SaveRow, "استرجاع", 14, UDim2.fromOffset(80, 9), UDim2.fromOffset(70, 30), Color3.fromRGB(18, 55, 130))
+addCorner(LoadBtn, UDim.new(0, 8))
+local ClearBtn = createButton(SaveRow, "مسح", 14, UDim2.fromOffset(160, 9), UDim2.fromOffset(50, 30), Color3.fromRGB(90, 20, 30))
+addCorner(ClearBtn, UDim.new(0, 8))
+
+local function resetSaveLabel()
+    if not IsAlive then return end
+    pcall(function()
+        SaveStatusLabel.Text = "اضغط حفظ أو استرجاع"
+        SaveStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    end)
+end
+
+SaveBtn.MouseButton1Click:Connect(function()
+    if not CanSave then SaveStatusLabel.Text = "غير مدعوم" return end
+    local data = {State = State, Values = Values}
+    local ok, enc = pcall(function() return HttpService:JSONEncode(data) end)
+    if ok then
+        pcall(function() writefile(SAVE_FILE, enc) end)
+        SaveStatusLabel.Text = "✅ تم الحفظ"
+        SaveStatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
+        task.delay(2, resetSaveLabel)
+    else
+        SaveStatusLabel.Text = "❌ فشل"
+        SaveStatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+    end
+end)
+LoadBtn.MouseButton1Click:Connect(function()
+    if not CanSave then SaveStatusLabel.Text = "غير مدعوم" return end
+    if not isfile(SAVE_FILE) then SaveStatusLabel.Text = "لا يوجد محفوظات" return end
+    local ok, content = pcall(function() return readfile(SAVE_FILE) end)
+    if not ok or not content then return end
+    local ok2, decoded = pcall(function() return HttpService:JSONDecode(content) end)
+    if not ok2 or not decoded then return end
+    if decoded.State then
+        for k, v in pairs(decoded.State) do
+            if State[k] ~= nil then
+                State[k] = v
+                if UISetters[k] then UISetters[k](v) end
+            end
+        end
+    end
+    if decoded.Values then
+        for k, v in pairs(decoded.Values) do
+            if Values[k] ~= nil then Values[k] = v end
+        end
+    end
+    pcall(function() setSpeed(Values.speed, false) end)
+    pcall(function() setHitboxValue(Values.hitboxSize, true) end)
+    pcall(function() JumpInput.Text = tostring(Values.jumpPower) end)
+    pcall(function() FOVInput.Text = tostring(Values.fov) end)
+    pcall(function() ZoomInput.Text = tostring(Values.zoom) end)
+    pcall(function() setScale(Values.uiScale) end)
+    pcall(function() TranspInput.Text = tostring(math.floor(Values.uiTransparency * 100)) end)
+    pcall(function() MainFrame.BackgroundTransparency = Values.uiTransparency end)
+    SaveStatusLabel.Text = "✅ تم الاسترجاع"
+    SaveStatusLabel.TextColor3 = Color3.fromRGB(0, 200, 255)
+    task.delay(2, resetSaveLabel)
+end)
+ClearBtn.MouseButton1Click:Connect(function()
+    if not CanSave then return end
+    pcall(function() delfile(SAVE_FILE) end)
+    SaveStatusLabel.Text = "🗑️ تم المسح"
+    SaveStatusLabel.TextColor3 = Color3.fromRGB(255, 170, 0)
+    task.delay(2, resetSaveLabel)
+end)
+
+local ResetRow = makeRow(SettingsPage, 48, Colors.Red, "🔄", "إعادة الشخصية")
+local ResetBtn = createButton(ResetRow, "🔄", 16, UDim2.new(1, -70, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(90, 20, 30))
+addCorner(ResetBtn, UDim.new(0, 8))
+local resetArmed = false
+ResetBtn.MouseButton1Click:Connect(function()
+    if not resetArmed then
+        resetArmed = true
+        ResetBtn.Text = "تأكيد؟"
+        task.delay(3, function()
+            if not IsAlive then return end
+            pcall(function() resetArmed = false ResetBtn.Text = "🔄" end)
+        end)
+    else
+        resetArmed = false
+        ResetBtn.Text = "🔄"
+        local h = hu()
+        if h then h.Health = 0 end
+    end
+end)
+
+-- ================================================================================
+-- تبويب المعلومات
+-- ================================================================================
+local InfoBox = createFrame(InfoPage, UDim2.new(0, 10, 0, 10), UDim2.new(1, -20, 0, 56), Color3.fromRGB(11, 16, 36))
+addCorner(InfoBox, UDim.new(0, 12)); addStroke(InfoBox, Colors.Blue, 2)
+local InfoTitle = createLabel(InfoBox, "هذا السكربت تم تصميمه لاجل خليل 👑", 17, UDim2.fromOffset(10, 0), UDim2.new(1, -20, 1, 0), Color3.fromRGB(190, 235, 255))
+InfoTitle.TextWrapped = true
+local StatsBox = createFrame(InfoPage, UDim2.new(0, 10, 0, 74), UDim2.new(1, -20, 0, 236), Color3.fromRGB(11, 16, 36))
+addCorner(StatsBox, UDim.new(0, 12)); addStroke(StatsBox, Colors.Cyan, 2)
+local StatsLabel = createLabel(StatsBox, "", 15, UDim2.fromOffset(10, 6), UDim2.new(1, -20, 1, -12), Colors.White)
+StatsLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatsLabel.TextYAlignment = Enum.TextYAlignment.Top
+StatsLabel.TextWrapped = true
+
+local fpsN, fpsT = 0, 0
+bind(RunService.RenderStepped, function(dt)
+    fpsN += 1; fpsT += dt
+    if fpsT >= 0.5 then
+        local fps = math.floor(fpsN / fpsT + 0.5)
+        fpsN, fpsT = 0, 0
+        if InfoPage.Visible then
+            local ping = 0
+            pcall(function() ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue() + 0.5) end)
+            local pos = "-"
+            local c = LocalPlayer.Character
+            if c then
+                local r = c:FindFirstChild("HumanoidRootPart")
+                if r then pos = math.floor(r.Position.X) .. ", " .. math.floor(r.Position.Y) .. ", " .. math.floor(r.Position.Z) end
+            end
+            StatsLabel.Text = "الإطارات: " .. fps
+                .. "\nزمن الاستجابة: " .. ping .. " ميث"
+                .. "\nعدد اللاعبين: " .. #Players:GetPlayers() .. "/" .. Players.MaxPlayers
+                .. "\nالشخصية: " .. LocalPlayer.DisplayName
+                .. "\nالموقع: " .. pos
+        end
+    end
+end)
+
+-- ================================================================================
+-- القائمة الجانبية - التبويبات
+-- ================================================================================
+local TabList = {}
+local function showPage(page)
+    for _, t in ipairs(TabList) do
+        local active = t.page == page
+        t.page.Visible = active
+        t.btn.BackgroundColor3 = active and Color3.fromRGB(18, 55, 130) or Colors.Navy
+        t.stroke.Transparency = active and 0 or 1
+    end
+end
+local function makeTab(text, y, page)
+    local b = createButton(MainFrame, text, 14, UDim2.fromOffset(10, y), UDim2.fromOffset(104, 34), Colors.Navy, Color3.fromRGB(150, 220, 255))
+    addCorner(b, UDim.new(0, 10))
+    local s = addStroke(b, Colors.Blue, 2)
+    table.insert(TabList, {btn = b, page = page, stroke = s})
+    b.MouseButton1Click:Connect(function() showPage(page) end)
+end
+makeTab("🏠 الرئيسية", 130, HomePage)
+makeTab("🌱 الزراعة", 168, FarmPage)
+makeTab("⚙️ الإعدادات", 206, SettingsPage)
+makeTab("ℹ️ معلومات", 244, InfoPage)
+showPage(HomePage)
+
+-- ================================================================================
+-- الزر العائم
+-- ================================================================================
+local FloatingButton = Instance.new("ImageButton", ScreenGui)
+FloatingButton.Size = UDim2.fromOffset(80, 80)
+FloatingButton.Position = UDim2.new(0, 30, 0.35, 0)
+FloatingButton.BackgroundColor3 = Color3.fromRGB(20, 30, 60)
+FloatingButton.Image = AvatarImage
+FloatingButton.AutoButtonColor = false
+FloatingButton.Visible = false
+FloatingButton.BorderSizePixel = 0
+addCorner(FloatingButton, UDim.new(1, 0))
+addStroke(FloatingButton, Colors.Blue, 5)
+local FloatCrown = createLabel(FloatingButton, "👑", 26, UDim2.new(1, -36, 0, -16), UDim2.fromOffset(34, 30), Color3.fromRGB(80, 190, 255))
+FloatCrown.ZIndex = 3
+local fDrag, fStart, fOrigin, fMoved = false, nil, nil, false
+local function isPress(i)
+    return i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1
+end
+FloatingButton.InputBegan:Connect(function(i)
+    if isPress(i) then
+        fDrag = true; fStart = i.Position; fOrigin = FloatingButton.Position; fMoved = false
+    end
+end)
+bind(UserInputService.InputChanged, function(i)
+    if fDrag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+        local dx = i.Position.X - fStart.X
+        local dy = i.Position.Y - fStart.Y
+        if math.abs(dx) + math.abs(dy) > 10 then fMoved = true end
+        if fMoved then
+            FloatingButton.Position = UDim2.new(fOrigin.X.Scale, fOrigin.X.Offset + dx, fOrigin.Y.Scale, fOrigin.Y.Offset + dy)
+        end
+    end
+end)
+bind(UserInputService.InputEnded, function(i)
+    if fDrag and isPress(i) then
+        fDrag = false
+        if not fMoved then
+            FloatingButton.Visible = false
+            MainFrame.Visible = true
+        end
+    end
+end)
+CloseButton.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false
+    FloatingButton.Visible = true
+end)
+MinimizeButton.MouseButton1Click:Connect(function()
+    IsMinimized = not IsMinimized
+    if IsMinimized then
+        MainFrame.Size = UDim2.new(0, 500, 0, 80)
+        ContentPanel.Visible = false
+        for _, t in ipairs(TabList) do t.btn.Visible = false end
+        Signature.Visible = false
+    else
+        MainFrame.Size = UDim2.new(0, 500, 0, 440)
+        ContentPanel.Visible = true
+        for _, t in ipairs(TabList) do t.btn.Visible = true end
+        Signature.Visible = true
+    end
+end)
+
+bind(UserInputService.InputBegan, function(i, gp)
+    if gp then return end
+    if i.KeyCode == Enum.KeyCode.RightShift then
+        local show = not MainFrame.Visible
+        MainFrame.Visible = show
+        FloatingButton.Visible = not show
+    end
+    if UserInputService:IsKeyDown(Enum.KeyCode.RightControl) then
+        local map = {
+            [Enum.KeyCode.One] = "fly",
+            [Enum.KeyCode.Two] = "infJump",
+            [Enum.KeyCode.Three] = "speed",
+            [Enum.KeyCode.Four] = "god",
+            [Enum.KeyCode.Five] = "hitbox",
+        }
+        local key = map[i.KeyCode]
+        if key then
+            State[key] = not State[key]
+            if UISetters[key] then UISetters[key](State[key]) end
+        end
+    end
+end)
+
+-- ════════════════════════════════════════════════════════════════════════════════
+-- ⚡ تنفيذ الميزات (بعد كل عناصر الواجهة)
+-- ════════════════════════════════════════════════════════════════════════════════
+
+-- ============ Noclip ============
+local savedCollide = {}
+local function applyNoclip()
+    local c = ch()
+    if not c then return end
+    for _, p in ipairs(c:GetDescendants()) do
+        if p:IsA("BasePart") and p.CanCollide then
+            if savedCollide[p] == nil then savedCollide[p] = true end
+            p.CanCollide = false
+        end
+    end
+end
 local function restoreCollide()
-	for part, state in pairs(savedCollide) do
-		if part and part.Parent then part.CanCollide = state end
-	end
-	savedCollide = {}
+    for part, _ in pairs(savedCollide) do
+        if part and part.Parent then part.CanCollide = true end
+    end
+    savedCollide = {}
 end
 
-local function watchChar(c)
-	if not c or watchedChars[c] then return end
-	watchedChars[c] = true
-	c.DescendantAdded:Connect(function(p)
-		if S.noclip and p:IsA("BasePart") then
-			task.wait()
-			if p.Parent then
-				if savedCollide[p] == nil then savedCollide[p] = p.CanCollide end
-				p.CanCollide = false
-			end
-		end
-	end)
+RunService.Stepped:Connect(function()
+    if State.noclip then applyNoclip() end
+end)
+
+-- ============ Fly ============
+local bv, bg
+RunService.RenderStepped:Connect(function()
+    local h, r = hu(), rt()
+    if not State.fly then
+        if bv then bv:Destroy() bv = nil end
+        if bg then bg:Destroy() bg = nil end
+        if h and h.PlatformStand then h.PlatformStand = false end
+        return
+    end
+    if not (r and h) then return end
+    if not bv or bv.Parent ~= r then
+        if bv then bv:Destroy() end
+        if bg then bg:Destroy() end
+        bv = Instance.new("BodyVelocity", r)
+        bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        bg = Instance.new("BodyGyro", r)
+        bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+        bg.P = 9e4
+    end
+    h.PlatformStand = true
+    local dir = h.MoveDirection * Values.flySpeed
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, Values.flySpeed, 0) end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl) then
+        dir = dir - Vector3.new(0, Values.flySpeed, 0)
+    end
+    bv.Velocity = dir
+    bg.CFrame = workspace.CurrentCamera.CFrame
+end)
+
+-- ============ Speed ============
+RunService.Heartbeat:Connect(function()
+    if not State.speed then return end
+    local h = hu()
+    if h and h.WalkSpeed ~= Values.speed then h.WalkSpeed = Values.speed end
+end)
+
+-- ============ Jump Power ============
+RunService.Heartbeat:Connect(function()
+    if not State.jump then return end
+    local h = hu()
+    if h and h.UseJumpPower and h.JumpPower ~= Values.jumpPower then
+        h.JumpPower = Values.jumpPower
+    end
+end)
+
+-- ============ Infinite Jump ============
+bind(UserInputService.JumpRequest, function()
+    if State.infJump then
+        local h = hu()
+        if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+
+-- ============ God Mode ============
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if State.god then
+            local h = hu()
+            if h then
+                h.MaxHealth = math.huge
+                if h.Health < h.MaxHealth then h.Health = h.MaxHealth end
+            end
+        end
+    end
+end)
+
+-- ============ Hitbox Expander ============
+local savedSizes = {}
+task.spawn(function()
+    while true do
+        task.wait(0.4)
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Character then
+                local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    if State.hitbox then
+                        if savedSizes[hrp] == nil then savedSizes[hrp] = hrp.Size end
+                        local s = Values.hitboxSize
+                        hrp.Size = Vector3.new(s, s, s)
+                        hrp.Transparency = 1
+                        hrp.CanCollide = false
+                        hrp.Massless = true
+                    elseif savedSizes[hrp] then
+                        hrp.Size = savedSizes[hrp]
+                        hrp.Transparency = 1
+                        hrp.CanCollide = false
+                        savedSizes[hrp] = nil
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ============ FOV ============
+RunService.RenderStepped:Connect(function()
+    local cam = workspace.CurrentCamera
+    if cam then
+        if State.fov then cam.FieldOfView = Values.fov
+        else cam.FieldOfView = 70 end
+    end
+end)
+
+-- ============ Zoom ============
+RunService.RenderStepped:Connect(function()
+    if State.zoom then
+        LocalPlayer.CameraMaxZoomDistance = Values.zoom
+    else
+        LocalPlayer.CameraMaxZoomDistance = 400
+    end
+end)
+
+-- ============ No Shake ============
+local baseCamPos = nil
+RunService.RenderStepped:Connect(function()
+    if not State.noshake then return end
+    local cam = workspace.CurrentCamera
+    if cam then
+        -- تقليل الاهتزاز
+        pcall(function()
+            cam.CFrame = cam.CFrame
+        end)
+    end
+end)
+
+-- ============ Fullbright ============
+local bright = {Brightness = 0, ClockTime = 0, Ambient = nil, OutdoorAmbient = nil, FogEnd = 0}
+local function applyBright()
+    if not bright.Saved then
+        bright.Brightness = Lighting.Brightness
+        bright.ClockTime = Lighting.ClockTime
+        bright.Ambient = Lighting.Ambient
+        bright.OutdoorAmbient = Lighting.OutdoorAmbient
+        bright.FogEnd = Lighting.FogEnd
+        bright.Saved = true
+    end
+    Lighting.Brightness = 3
+    Lighting.ClockTime = 14
+    Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+    Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+    Lighting.FogEnd = 1e6
 end
-
--- ═══════════════════════════════════════════════════════════
--- 6) دوال مساعدة آمنة (لا recursion، لا nil calls)
--- ═══════════════════════════════════════════════════════════
-
--- touch آمن — يستدعي TouchTransmitter فقط
-local function safeTouch(part, humanoid)
-	if not part or not part.Parent or not humanoid then return end
-	pcall(function()
-		for _, d in ipairs(part:GetChildren()) do
-			if d:IsA("TouchTransmitter") then
-				-- TouchTransmitter يُطلق تلقائياً عند لمس Part
-				-- الحل: نحرك الشخصية قربها فقط
-				break
-			end
-		end
-	end)
+local function restoreBright()
+    if bright.Saved then
+        Lighting.Brightness = bright.Brightness
+        Lighting.ClockTime = bright.ClockTime
+        Lighting.Ambient = bright.Ambient
+        Lighting.OutdoorAmbient = bright.OutdoorAmbient
+        Lighting.FogEnd = bright.FogEnd
+    end
 end
+task.spawn(function()
+    local lastState = false
+    while true do
+        task.wait(0.5)
+        if State.fullbright and not lastState then applyBright(); lastState = true
+        elseif not State.fullbright and lastState then restoreBright(); lastState = false end
+    end
+end)
 
--- ProximityPrompt آمن
-local function firePrompt(prompt)
-	if not prompt or not prompt.Parent then return end
-	pcall(function()
-		local hold = prompt.HoldDuration or 0
-		prompt:InputHoldBegin()
-		if hold > 0 then task.wait(hold) end
-		prompt:InputHoldEnd()
-	end)
-end
-
--- البحث عن زر بالاسم أو النص
+-- ============ دوال مساعدة للزراعة ============
 local function findButton(keywords)
-	if type(keywords) == "string" then keywords = {keywords} end
-	for _, gui in ipairs(plr.PlayerGui:GetChildren()) do
-		for _, b in ipairs(gui:GetDescendants()) do
-			if b:IsA("TextButton") or b:IsA("ImageButton") then
-				local name = b.Name:lower()
-				local txt = (b.Text or ""):lower()
-				for _, kw in ipairs(keywords) do
-					local k = kw:lower()
-					if (name:find(k) or txt:find(k)) and b.Visible then
-						return b
-					end
-				end
-			end
-		end
-	end
-	return nil
+    if type(keywords) == "string" then keywords = {keywords} end
+    for _, gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
+        for _, b in ipairs(gui:GetDescendants()) do
+            if b:IsA("TextButton") or b:IsA("ImageButton") then
+                local name = b.Name:lower()
+                local txt = (b.Text or ""):lower()
+                for _, kw in ipairs(keywords) do
+                    local k = kw:lower()
+                    if (name:find(k) or txt:find(k)) and b.Visible then return b end
+                end
+            end
+        end
+    end
+    return nil
 end
 
--- الضغط على زر بأمان
 local function pressButton(btn)
-	if not btn or not btn.Parent then return false end
-	local ok = pcall(function() btn:Activate() end)
-	return ok
+    if not btn or not btn.Parent then return false end
+    local ok = pcall(function() btn:Activate() end)
+    return ok
 end
 
--- ═══════════════════════════════════════════════════════════
--- 7) Auto Roll
--- ═══════════════════════════════════════════════════════════
-local rollBtn, lastRoll = nil, 0
+local function firePrompt(prompt)
+    if not prompt or not prompt.Parent then return end
+    pcall(function()
+        local hold = prompt.HoldDuration or 0
+        prompt:InputHoldBegin()
+        if hold > 0 then task.wait(hold) end
+        prompt:InputHoldEnd()
+    end)
+end
 
+-- ============ Auto Roll ============
 task.spawn(function()
-	while true do
-		task.wait(0.15)
-		if S.autoRoll then
-			-- بحث عن زر Roll
-			if not rollBtn or not rollBtn.Parent then
-				rollBtn = findButton({"roll", "spin", "لف", "اسحب"})
-			end
-			if rollBtn then
-				local now = tick()
-				if now - lastRoll >= cfg.autoRollDelay then
-					lastRoll = now
-					pressButton(rollBtn)
-					statusLabel.Text = "🎲 Roll #" .. math.floor(now * 10) % 10000
-					statusLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
-				end
-			-- محاولة Remote
-			elseif Remotes.roll then
-				local now = tick()
-				if now - lastRoll >= cfg.autoRollDelay then
-					lastRoll = now
-					pcall(function() Remotes.roll:FireServer() end)
-					statusLabel.Text = "🎲 Roll (Remote)"
-					statusLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
-				end
-			else
-				statusLabel.Text = "⚠️ ما لقيت زر Roll"
-				statusLabel.TextColor3 = Color3.fromRGB(255, 150, 150)
-			end
-		end
-	end
+    local rollBtn, lastRoll = nil, 0
+    while true do
+        task.wait(0.15)
+        if State.autoRoll then
+            if not rollBtn or not rollBtn.Parent then
+                rollBtn = findButton({"roll", "spin", "اسحب", "لف"})
+            end
+            local now = tick()
+            if rollBtn and (now - lastRoll >= Values.autoRollDelay) then
+                lastRoll = now
+                pressButton(rollBtn)
+            elseif Remotes.roll and (now - lastRoll >= Values.autoRollDelay) then
+                lastRoll = now
+                pcall(function() Remotes.roll:FireServer() end)
+            end
+        end
+    end
 end)
 
--- ═══════════════════════════════════════════════════════════
--- 8) Auto Collect — يعتمد على Remote المُكتشف CollectFruitPickup
--- ═══════════════════════════════════════════════════════════
-local collectBtn, lastCollect = nil, 0
-
+-- ============ Auto Collect ============
 task.spawn(function()
-	while true do
-		task.wait(0.3)
-		if S.autoCollect then
-			-- زر في الواجهة
-			if not collectBtn or not collectBtn.Parent then
-				collectBtn = findButton({"collect", "claim", "grab", "money", "cash", "جمع", "استلام"})
-			end
-
-			local now = tick()
-			if collectBtn and (now - lastCollect >= cfg.autoCollectDelay) then
-				lastCollect = now
-				pressButton(collectBtn)
-				statusLabel.Text = "💰 جمع المال..."
-				statusLabel.TextColor3 = Color3.fromRGB(100, 255, 150)
-			end
-		end
-	end
+    local collectBtn, lastCollect = nil, 0
+    while true do
+        task.wait(0.3)
+        if State.autoCollect then
+            if not collectBtn or not collectBtn.Parent then
+                collectBtn = findButton({"collect", "claim", "grab", "money", "cash", "جمع"})
+            end
+            local now = tick()
+            if collectBtn and (now - lastCollect >= Values.autoCollectDelay) then
+                lastCollect = now
+                pressButton(collectBtn)
+            end
+            -- محاولة Remote
+            if Remotes.collectFruit and (now - lastCollect >= Values.autoCollectDelay) then
+                lastCollect = now
+                pcall(function() Remotes.collectFruit:FireServer() end)
+            end
+        end
+    end
 end)
 
--- ═══════════════════════════════════════════════════════════
--- 9) Auto Steal — يطير للنباتات ويسرقها
--- ═══════════════════════════════════════════════════════════
+-- ============ Auto Steal ============
 local function getNearestFruit()
-	local root = rt()
-	if not root then return nil end
-	local best, bestD = nil, cfg.stealRange
-	for _, obj in ipairs(workspace:GetDescendants()) do
-		if obj:IsA("BasePart") or (obj:IsA("Model") and obj.PrimaryPart) then
-			local n = obj.Name:lower()
-			if n:find("fruit") or n:find("plant") or n:find("crop")
-			or n:find("tree") or n:find("harvest") or n:find("نبت") then
-				local pos = obj:IsA("BasePart") and obj.Position
-					or (obj.PrimaryPart and obj.PrimaryPart.Position)
-				if pos then
-					local d = dist(pos, root.Position)
-					if d < bestD then best, bestD = obj, d end
-				end
-			end
-		end
-	end
-	return best
-end
-
-local function tpTo(target)
-	local root = rt()
-	if not root or not target then return end
-	local pos = target:IsA("BasePart") and target.Position
-		or (target.PrimaryPart and target.PrimaryPart.Position)
-	if not pos then return end
-
-	if cfg.tpSmooth then
-		-- تحريك سلس لتقليل كشف الأنظمة
-		local goal = CFrame.new(pos + Vector3.new(0, 3, 0))
-		root.CFrame = root.CFrame:Lerp(goal, 0.5)
-	else
-		root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
-	end
+    local root = rt()
+    if not root then return nil end
+    local best, bestD = nil, 400
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") or (obj:IsA("Model") and obj.PrimaryPart) then
+            local n = obj.Name:lower()
+            if n:find("fruit") or n:find("plant") or n:find("crop")
+            or n:find("tree") or n:find("harvest") or n:find("نبت") then
+                local pos = obj:IsA("BasePart") and obj.Position
+                    or (obj.PrimaryPart and obj.PrimaryPart.Position)
+                if pos then
+                    local d = dist3(pos, root.Position)
+                    if d < bestD then best, bestD = obj, d end
+                end
+            end
+        end
+    end
+    return best
 end
 
 task.spawn(function()
-	while true do
-		task.wait(cfg.autoStealDelay)
-		if S.autoSteal then
-			local target = getNearestFruit()
-			if target then
-				tpTo(target)
-				statusLabel.Text = "🌱 سرقة: " .. target.Name
-				statusLabel.TextColor3 = Color3.fromRGB(255, 100, 200)
+    while true do
+        task.wait(Values.autoStealDelay)
+        if State.autoSteal then
+            local target = getNearestFruit()
+            local root = rt()
+            if target and root then
+                local pos = target:IsA("BasePart") and target.Position
+                    or (target.PrimaryPart and target.PrimaryPart.Position)
+                if pos then
+                    -- حركة سلسة (أقل كشف)
+                    local goal = CFrame.new(pos + Vector3.new(0, 3, 0))
+                    root.CFrame = root.CFrame:Lerp(goal, 0.6)
 
-				-- لمس الجزء لجعله يطلق TouchTransmitter
-				local h = hu()
-				if target:IsA("BasePart") then safeTouch(target, h) end
+                    -- محاولة ProximityPrompt
+                    for _, p in ipairs(target:GetDescendants()) do
+                        if p:IsA("ProximityPrompt") then firePrompt(p) end
+                    end
 
-				-- تشغيل ProximityPrompt إن وجد
-				for _, p in ipairs(target:GetDescendants()) do
-					if p:IsA("ProximityPrompt") then firePrompt(p) end
-				end
-
-				-- محاولة إرسال Remote السرقة
-				if Remotes.steal then
-					pcall(function() Remotes.steal:FireServer(target) end)
-				end
-				if Remotes.collectFruit then
-					pcall(function() Remotes.collectFruit:FireServer(target) end)
-				end
-			else
-				statusLabel.Text = "🔍 ما فيه نباتات قريبة"
-				statusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-			end
-		end
-	end
+                    -- محاولة Remotes
+                    if Remotes.steal then pcall(function() Remotes.steal:FireServer(target) end) end
+                    if Remotes.collectFruit then pcall(function() Remotes.collectFruit:FireServer(target) end) end
+                end
+            end
+        end
+    end
 end)
 
--- ═══════════════════════════════════════════════════════════
--- 10) ESP
--- ═══════════════════════════════════════════════════════════
+-- ============ ESP ============
+local espBoxes = {}
+
 local function createESP(obj, color)
-	if not obj or not obj.Parent or espBoxes[obj] then return end
-	local adornee = obj:IsA("BasePart") and obj or obj.PrimaryPart
-	if not adornee then
-		local ok, pivot = pcall(function() return obj:GetPivot() end)
-		if not ok then return end
-		-- إنشاء Part مؤقت
-		local tmp = Instance.new("Part")
-		tmp.Anchored = true
-		tmp.CanCollide = false
-		tmp.Transparency = 1
-		tmp.Size = Vector3.new(2, 2, 2)
-		tmp.CFrame = pivot
-		tmp.Parent = g
-		adornee = tmp
-	end
-	local size = adornee.Size or Vector3.new(3, 3, 3)
-	local box = Instance.new("BoxHandleAdornment")
-	box.Size = size + Vector3.new(0.5, 0.5, 0.5)
-	box.Adornee = adornee
-	box.AlwaysOnTop = true
-	box.ZIndex = 5
-	box.Transparency = 0.6
-	box.Color3 = color
-	box.Parent = g
-	espBoxes[obj] = box
+    if not obj or not obj.Parent or espBoxes[obj] then return end
+    local adornee = obj:IsA("BasePart") and obj or obj.PrimaryPart
+    if not adornee then
+        local ok, pivot = pcall(function() return obj:GetPivot() end)
+        if not ok then return end
+        local tmp = Instance.new("Part")
+        tmp.Anchored = true; tmp.CanCollide = false; tmp.Transparency = 1
+        tmp.Size = Vector3.new(2, 2, 2); tmp.CFrame = pivot; tmp.Parent = ScreenGui
+        adornee = tmp
+    end
+    local size = adornee.Size or Vector3.new(3, 3, 3)
+    local box = Instance.new("BoxHandleAdornment")
+    box.Size = size + Vector3.new(0.5, 0.5, 0.5)
+    box.Adornee = adornee
+    box.AlwaysOnTop = true
+    box.ZIndex = 5
+    box.Transparency = 0.6
+    box.Color3 = color
+    box.Parent = ScreenGui
+    espBoxes[obj] = box
 end
 
 local function clearESP()
-	for _, box in pairs(espBoxes) do
-		if box and box.Parent then box:Destroy() end
-	end
-	espBoxes = {}
+    for _, box in pairs(espBoxes) do
+        if box and box.Parent then box:Destroy() end
+    end
+    espBoxes = {}
 end
 
 task.spawn(function()
-	while true do
-		task.wait(0.8)
-		local anyESP = S.espPlants or S.espPlayers or S.espPets
-		if anyESP then
-			if S.espPlants then
-				for _, obj in ipairs(workspace:GetDescendants()) do
-					if obj:IsA("BasePart") or (obj:IsA("Model") and obj.PrimaryPart) then
-						local n = obj.Name:lower()
-						if n:find("fruit") or n:find("plant") or n:find("crop") or n:find("نبت") then
-							createESP(obj, Color3.fromRGB(0, 255, 100))
-						end
-					end
-				end
-			end
-			if S.espPlayers then
-				for _, p in ipairs(Players:GetPlayers()) do
-					if p ~= plr and p.Character then
-						local hrp = p.Character:FindFirstChild("HumanoidRootPart")
-						if hrp then createESP(hrp, Color3.fromRGB(255, 100, 100)) end
-					end
-				end
-			end
-			if S.espPets then
-				for _, obj in ipairs(workspace:GetDescendants()) do
-					if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
-						local n = obj.Name:lower()
-						if n:find("pet") or n:find("حيوان") then
-							createESP(obj, Color3.fromRGB(100, 200, 255))
-						end
-					end
-				end
-			end
-		else
-			if next(espBoxes) then clearESP() end
-		end
-	end
+    while true do
+        task.wait(0.8)
+        local anyESP = State.espPlants or State.espPlayers
+        if anyESP then
+            if State.espPlants then
+                for _, obj in ipairs(workspace:GetDescendants()) do
+                    if obj:IsA("BasePart") or (obj:IsA("Model") and obj.PrimaryPart) then
+                        local n = obj.Name:lower()
+                        if n:find("fruit") or n:find("plant") or n:find("crop") or n:find("نبت") then
+                            createESP(obj, Color3.fromRGB(0, 255, 100))
+                        end
+                    end
+                end
+            end
+            if State.espPlayers then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer and p.Character then
+                        local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+                        if hrp then createESP(hrp, Color3.fromRGB(255, 100, 100)) end
+                    end
+                end
+            end
+        else
+            if next(espBoxes) then clearESP() end
+        end
+    end
 end)
 
--- ═══════════════════════════════════════════════════════════
--- 11) أزرار الواجهة
--- ═══════════════════════════════════════════════════════════
-mkBtn(60, "🧱 عبور الجدران", Color3.fromRGB(0, 140, 255), function(on)
-	S.noclip = on
-	if on then applyNoclip(ch()) else restoreCollide() end
-end)
-
-mkBtn(96, "🪽 الطيران", Color3.fromRGB(0, 220, 100), function(on)
-	S.fly = on
-	flyBtns.Visible = on and main.Visible
-	if not on then
-		flyUp, flyDown = false, false
-		local h = hu()
-		if h then h.PlatformStand = false end
-		local r = rt()
-		if r then
-			r.AssemblyLinearVelocity = Vector3.zero
-			r.AssemblyAngularVelocity = Vector3.zero
-		end
-	end
-end)
-
-mkBtn(132, "🎲 Roll تلقائي", Color3.fromRGB(255, 200, 50), function(on)
-	S.autoRoll = on
-	rollBtn = nil
-	if on then
-		statusLabel.Text = "🎲 Roll مفعّل"
-		statusLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
-	end
-end)
-
-mkBtn(168, "💰 جمع المال", Color3.fromRGB(50, 220, 100), function(on)
-	S.autoCollect = on
-	collectBtn = nil
-	if on then
-		statusLabel.Text = "💰 الجمع مفعّل"
-		statusLabel.TextColor3 = Color3.fromRGB(100, 255, 150)
-	end
-end)
-
-mkBtn(204, "🌱 سرقة تلقائية", Color3.fromRGB(255, 80, 200), function(on)
-	S.autoSteal = on
-	if on then
-		statusLabel.Text = "🌱 السرقة مفعّلة"
-		statusLabel.TextColor3 = Color3.fromRGB(255, 100, 200)
-	else
-		statusLabel.Text = "⚪ جاهز"
-		statusLabel.TextColor3 = Color3.fromRGB(180, 220, 255)
-	end
-end)
-
-mkBtn(240, "🌿 ESP النباتات", Color3.fromRGB(0, 255, 100), function(on)
-	S.espPlants = on
-	if not on and not S.espPlayers and not S.espPets then clearESP() end
-end)
-
-mkBtn(276, "👥 ESP اللاعبين", Color3.fromRGB(255, 100, 100), function(on)
-	S.espPlayers = on
-	if not on and not S.espPlants and not S.espPets then clearESP() end
-end)
-
-mkBtn(312, "🐾 ESP الحيوانات", Color3.fromRGB(100, 200, 255), function(on)
-	S.espPets = on
-	if not on and not S.espPlants and not S.espPlayers then clearESP() end
-end)
-
-mkBtn(348, "🔄 إعادة فحص Remotes", Color3.fromRGB(150, 150, 255), function(on)
-	scanRemotes()
-	local names = {}
-	for name, _ in pairs(Remotes.list) do table.insert(names, name) end
-	statusLabel.Text = "🔍 Remotes: " .. (#names > 0 and #names .. " حدث" or "ما فيه")
-	statusLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
-	print("═══ Remotes المكتشفة ═══")
-	for _, name in ipairs(names) do print("  •", name) end
-end)
-
--- ═══════════════════════════════════════════════════════════
--- 12) سلايدر السرعة
--- ═══════════════════════════════════════════════════════════
-local spdLabel = Instance.new("TextLabel", main)
-spdLabel.Size = UDim2.new(1, -30, 0, 18)
-spdLabel.Position = UDim2.fromOffset(15, 388)
-spdLabel.BackgroundTransparency = 1
-spdLabel.Text = "⚡ السرعة: " .. FLY_SPEED
-spdLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
-spdLabel.Font = Enum.Font.GothamBold
-spdLabel.TextSize = 12
-spdLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-local slider = Instance.new("Frame", main)
-slider.Size = UDim2.new(1, -30, 0, 6)
-slider.Position = UDim2.fromOffset(15, 410)
-slider.BackgroundColor3 = Color3.fromRGB(30, 40, 60)
-slider.BorderSizePixel = 0
-Instance.new("UICorner", slider).CornerRadius = UDim.new(1, 0)
-
-local fill = Instance.new("Frame", slider)
-fill.Size = UDim2.fromScale((FLY_SPEED - 10) / 190, 1)
-fill.BackgroundColor3 = Color3.fromRGB(255, 220, 100)
-fill.BorderSizePixel = 0
-Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
-
-local knob = Instance.new("Frame", slider)
-knob.Size = UDim2.fromOffset(14, 14)
-knob.Position = UDim2.new(fill.Size.X.Scale, -7, 0.5, -7)
-knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-knob.BorderSizePixel = 0
-Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
-
-local sliderBtn = Instance.new("TextButton", slider)
-sliderBtn.Size = UDim2.new(1, 20, 3, 0)
-sliderBtn.Position = UDim2.fromOffset(-10, -10)
-sliderBtn.BackgroundTransparency = 1
-sliderBtn.Text = ""
-
-local dragSlider = false
-
-local function setSpeedFromX(x)
-	local absX = slider.AbsolutePosition.X
-	local w = slider.AbsoluteSize.X
-	local t = math.clamp((x - absX) / w, 0, 1)
-	local val = math.floor(10 + t * 190)
-	FLY_SPEED = val
-	cfg.speed = val
-	fill.Size = UDim2.fromScale(t, 1)
-	knob.Position = UDim2.new(t, -7, 0.5, -7)
-	spdLabel.Text = "⚡ السرعة: " .. val
+-- ================================================================================
+-- الحفظ عند الإغلاق
+-- ================================================================================
+_G.KhalilCleanup = function()
+    IsAlive = false
+    for _, c in ipairs(Connections) do pcall(function() c:Disconnect() end) end
+    Connections = {}
+    pcall(function() ScreenGui:Destroy() end)
 end
 
-sliderBtn.InputBegan:Connect(function(i)
-	if i.UserInputType == Enum.UserInputType.MouseButton1
-	or i.UserInputType == Enum.UserInputType.Touch then
-		dragSlider = true
-		setSpeedFromX(i.Position.X)
-	end
-end)
-UIS.InputChanged:Connect(function(i)
-	if not dragSlider then return end
-	if i.UserInputType == Enum.UserInputType.MouseMovement
-	or i.UserInputType == Enum.UserInputType.Touch then
-		setSpeedFromX(i.Position.X)
-	end
-end)
-UIS.InputEnded:Connect(function(i)
-	if i.UserInputType == Enum.UserInputType.MouseButton1
-	or i.UserInputType == Enum.UserInputType.Touch then
-		if dragSlider then dragSlider = false; saveCfg() end
-	end
-end)
-
--- تلميح
-local hint = Instance.new("TextLabel", main)
-hint.Size = UDim2.new(1, -20, 0, 25)
-hint.Position = UDim2.fromOffset(10, 425)
-hint.BackgroundTransparency = 1
-hint.Text = "Shift الأيمن = إخفاء | Space/Ctrl = صعود ونزول"
-hint.TextColor3 = Color3.fromRGB(0, 200, 255)
-hint.Font = Enum.Font.Gotham
-hint.TextSize = 10
-hint.TextWrapped = true
-
--- ═══════════════════════════════════════════════════════════
--- 13) Noclip Loop
--- ═══════════════════════════════════════════════════════════
-RS.Stepped:Connect(function()
-	if not S.noclip then return end
-	local c = ch()
-	if not c then return end
-	for _, p in ipairs(c:GetDescendants()) do
-		if p:IsA("BasePart") and p.CanCollide then
-			if savedCollide[p] == nil then savedCollide[p] = p.CanCollide end
-			p.CanCollide = false
-		end
-	end
-end)
-
--- ═══════════════════════════════════════════════════════════
--- 14) Fly Loop
--- ═══════════════════════════════════════════════════════════
-local function clearFly()
-	if bv then bv:Destroy() bv = nil end
-	if bg then bg:Destroy() bg = nil end
-end
-
-RS.RenderStepped:Connect(function()
-	local h, r = hu(), rt()
-	if not S.fly then
-		if bv or bg then clearFly() end
-		if h and h.PlatformStand then h.PlatformStand = false end
-		return
-	end
-	if not (r and h) then return end
-	if not bv or bv.Parent ~= r then
-		clearFly()
-		bv = Instance.new("BodyVelocity", r)
-		bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-		bg = Instance.new("BodyGyro", r)
-		bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-		bg.P = 9e4
-	end
-	h.PlatformStand = true
-	local dir = h.MoveDirection * FLY_SPEED
-	if flyUp then dir = dir + Vector3.new(0, FLY_SPEED, 0) end
-	if flyDown then dir = dir - Vector3.new(0, FLY_SPEED, 0) end
-	bv.Velocity = dir
-	bg.CFrame = workspace.CurrentCamera.CFrame
-end)
-
--- ═══════════════════════════════════════════════════════════
--- 15) كيبورد
--- ═══════════════════════════════════════════════════════════
-UIS.InputBegan:Connect(function(i, gp)
-	if gp then return end
-	if not S.fly then return end
-	if i.KeyCode == Enum.KeyCode.Space then flyUp = true end
-	if i.KeyCode == Enum.KeyCode.LeftControl or i.KeyCode == Enum.KeyCode.RightControl then flyDown = true end
-end)
-UIS.InputEnded:Connect(function(i)
-	if i.KeyCode == Enum.KeyCode.Space then flyUp = false end
-	if i.KeyCode == Enum.KeyCode.LeftControl or i.KeyCode == Enum.KeyCode.RightControl then flyDown = false end
-end)
-
--- ═══════════════════════════════════════════════════════════
--- 16) عند الريسبون
--- ═══════════════════════════════════════════════════════════
-plr.CharacterAdded:Connect(function(c)
-	S.fly = false
-	flyUp, flyDown = false, false
-	clearFly()
-	flyBtns.Visible = false
-	watchChar(c)
-	if S.noclip then
-		task.wait(0.1)
-		applyNoclip(c)
-	end
-end)
-
-if ch() then watchChar(ch()) end
-
--- ═══════════════════════════════════════════════════════════
--- 17) إخفاء/إظهار
--- ═══════════════════════════════════════════════════════════
-UIS.InputBegan:Connect(function(i, gp)
-	if gp then return end
-	if i.KeyCode == hideKey then
-		main.Visible = not main.Visible
-		flyBtns.Visible = main.Visible and S.fly
-	end
-end)
-
--- ═══════════════════════════════════════════════════════════
--- 18) سحب الواجهة
--- ═══════════════════════════════════════════════════════════
-local dragging, dragStart, startPos
-title.InputBegan:Connect(function(i)
-	if i.UserInputType == Enum.UserInputType.MouseButton1
-	or i.UserInputType == Enum.UserInputType.Touch then
-		dragging = true
-		dragStart = i.Position
-		startPos = main.Position
-	end
-end)
-UIS.InputChanged:Connect(function(i)
-	if not dragging then return end
-	if i.UserInputType == Enum.UserInputType.MouseMovement
-	or i.UserInputType == Enum.UserInputType.Touch then
-		local d = i.Position - dragStart
-		main.Position = UDim2.new(
-			startPos.X.Scale, startPos.X.Offset + d.X,
-			startPos.Y.Scale, startPos.Y.Offset + d.Y
-		)
-	end
-end)
-UIS.InputEnded:Connect(function(i)
-	if i.UserInputType == Enum.UserInputType.MouseButton1
-	or i.UserInputType == Enum.UserInputType.Touch then
-		dragging = false
-	end
-end)
-
--- ═══════════════════════════════════════════════════════════
-print("═══════════════════════════════════════════")
-print("🌱 سكربت خليل للنباتات v2.0 شغال")
-print("🎮 Remotes مكتشفة: " .. tostring(#Remotes.list))
-for name, _ in pairs(Remotes.list) do print("  •", name) end
-print("═══════════════════════════════════════════")
+print("=====================================================")
+print("  🌱 سكربت خليل | Khalil Script v3.0")
+print("  by خليل 👑")
+print("  Remotes مكتشفة: " .. tostring(#Remotes.list))
+print("  RightShift = إخفاء/إظهار | RightCtrl+1-5 = تفعيل سريع")
+print("=====================================================")
