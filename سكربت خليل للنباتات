@@ -1,5 +1,5 @@
 -- ================================================================================
--- 🌱 سكربت خليل | Khalil Script - واجهة كاملة + ميزات شغالة
+-- 🌱 سكربت خليل | Khalil Script v4.0 — مع تخفيف اللاق + كشف ذكي
 -- ================================================================================
 
 local Players = game:GetService("Players")
@@ -35,7 +35,8 @@ local State = {
     god = false, hitbox = false, fov = false, zoom = false,
     freecam = false, noshake = false, fullbright = false,
     noclip = false, autoRoll = false, autoCollect = false,
-    autoSteal = false, espPlants = false, espPlayers = false
+    autoSteal = false, espPlants = false, espPlayers = false,
+    lagReducer = false
 }
 
 local Values = {
@@ -52,7 +53,7 @@ local CanSave = (writefile and readfile and isfile and delfile) and true or fals
 local UISetters = {}
 
 -- ================================================================================
--- Helpers عامة
+-- Helpers
 -- ================================================================================
 local function getSafeParent()
     if gethui then
@@ -70,33 +71,77 @@ local function rt() local c = ch() return c and c:FindFirstChild("HumanoidRootPa
 local function dist3(a, b) return (a - b).Magnitude end
 
 -- ================================================================================
--- اكتشاف Remotes
+-- 🔍 نظام كشف ذكي للزراعة
 -- ================================================================================
-local Remotes = { list = {}, collectFruit = nil, roll = nil, steal = nil }
+local Farm = {
+    remotes = {},       -- كل الـ Remotes
+    buttons = {},       -- كل الأزرار في PlayerGui
+    plantParts = {},    -- أجزاء النباتات في Workspace
+    guessedRemotes = {},-- تخمين الأسماء المهمة
+    lastScan = 0,
+}
 
 local function scanRemotes()
-    Remotes.list = {}
-    Remotes.collectFruit = nil
-    Remotes.roll = nil
-    Remotes.steal = nil
+    Farm.remotes = {}
+    Farm.guessedRemotes = {}
     local folder = ReplicatedStorage:FindFirstChild("Remotes")
-    if folder then
-        for _, v in ipairs(folder:GetDescendants()) do
-            if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
-                Remotes.list[v.Name] = v
-                local low = v.Name:lower()
-                if low:find("collectfruit") or low:find("fruitpickup") then
-                    Remotes.collectFruit = v
-                elseif low:find("roll") or low:find("spin") then
-                    Remotes.roll = Remotes.roll or v
-                elseif low:find("steal") or low:find("take") then
-                    Remotes.steal = Remotes.steal or v
+    local searchIn = folder or ReplicatedStorage
+    for _, v in ipairs(searchIn:GetDescendants()) do
+        if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
+            table.insert(Farm.remotes, v)
+            local low = v.Name:lower()
+            if low:find("collectfruit") or low:find("fruitpickup") then
+                Farm.guessedRemotes.collectFruit = v
+            elseif low:find("roll") or low:find("spin") or low:find("shuffle") then
+                Farm.guessedRemotes.roll = v
+            elseif low:find("steal") or low:find("take") then
+                Farm.guessedRemotes.steal = v
+            elseif low:find("collect") and low:find("toggle") then
+                Farm.guessedRemotes.autoCollect = v
+            elseif low:find("plant") and (low:find("place") or low:find("spawn")) then
+                Farm.guessedRemotes.plantPlace = v
+            elseif low:find("cash") or low:find("money") or low:find("claim") then
+                Farm.guessedRemotes.collect = v
+            end
+        end
+    end
+end
+
+local function scanButtons()
+    Farm.buttons = {}
+    for _, gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
+        for _, b in ipairs(gui:GetDescendants()) do
+            if b:IsA("TextButton") or b:IsA("ImageButton") then
+                table.insert(Farm.buttons, b)
+            end
+        end
+    end
+end
+
+local function scanPlants()
+    Farm.plantParts = {}
+    local keywords = {"fruit", "plant", "crop", "tree", "harvest", "نبت", "شجرة", "فاكهة"}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") or (obj:IsA("Model") and obj.PrimaryPart) then
+            local n = obj.Name:lower()
+            for _, kw in ipairs(keywords) do
+                if n:find(kw) then
+                    table.insert(Farm.plantParts, obj)
+                    break
                 end
             end
         end
     end
 end
-scanRemotes()
+
+local function fullScan()
+    scanRemotes()
+    scanButtons()
+    scanPlants()
+    Farm.lastScan = tick()
+end
+
+fullScan()
 
 -- ================================================================================
 -- الألوان والمساعدات
@@ -110,6 +155,7 @@ local Colors = {
     Red = Color3.fromRGB(255, 40, 70),
     Cyan = Color3.fromRGB(0, 200, 255),
     Orange = Color3.fromRGB(255, 170, 0),
+    Pink = Color3.fromRGB(255, 100, 200),
     White = Color3.new(1, 1, 1),
     Black = Color3.fromRGB(0, 0, 0)
 }
@@ -306,12 +352,11 @@ local function makeSwitch(row, color, callback, initial)
 end
 
 -- ================================================================================
--- تبويب الرئيسية - الميزات العامة
+-- تبويب الرئيسية
 -- ================================================================================
 UISetters["fly"] = makeSwitch(makeRow(HomePage, 48, Colors.Green, "🪽", "الطيران"), Colors.Green, function(on) State.fly = on end)
 UISetters["infJump"] = makeSwitch(makeRow(HomePage, 48, Colors.Purple, "♾️", "قفز لا نهائي"), Colors.Purple, function(on) State.infJump = on end)
 
--- السرعة
 local SpeedRow = makeRow(HomePage, 92, Colors.Red, "🏃", "السرعة")
 UISetters["speed"] = makeSwitch(SpeedRow, Colors.Red, function(on) State.speed = on end)
 createFrame(SpeedRow, UDim2.fromOffset(0, 48), UDim2.new(1, 0, 0, 2), Colors.Red)
@@ -344,26 +389,19 @@ SpeedInput.FocusLost:Connect(function() setSpeed(tonumber(SpeedInput.Text) or Va
 SpeedMinus.MouseButton1Click:Connect(function() setSpeed(Values.speed - 1, false) end)
 SpeedPlus.MouseButton1Click:Connect(function() setSpeed(Values.speed + 1, false) end)
 local speedDragging = false
-local function speedFromX(x)
-    setSpeed(16 + math.clamp((x - SpeedHit.AbsolutePosition.X) / SpeedHit.AbsoluteSize.X, 0, 1) * 184, false)
-end
+local function speedFromX(x) setSpeed(16 + math.clamp((x - SpeedHit.AbsolutePosition.X) / SpeedHit.AbsoluteSize.X, 0, 1) * 184, false) end
 SpeedHit.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
         speedDragging = true; speedFromX(i.Position.X)
     end
 end)
 bind(UserInputService.InputChanged, function(i)
-    if speedDragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
-        speedFromX(i.Position.X)
-    end
+    if speedDragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then speedFromX(i.Position.X) end
 end)
 bind(UserInputService.InputEnded, function(i)
-    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        speedDragging = false
-    end
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then speedDragging = false end
 end)
 
--- القفز
 local JumpRow = makeRow(HomePage, 48, Colors.Green, "🦘", "قوة القفز")
 local JumpInput = createTextBox(JumpRow, tostring(Values.jumpPower), 16, UDim2.new(1, -140, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(6, 12, 30), Colors.Green)
 UISetters["jump"] = makeSwitch(JumpRow, Colors.Green, function(on) State.jump = on end)
@@ -375,7 +413,6 @@ end)
 
 UISetters["god"] = makeSwitch(makeRow(HomePage, 48, Colors.Green, "🛡️", "عدم الموت"), Colors.Green, function(on) State.god = on end)
 
--- الهيتبوكس
 local HitboxRow = makeRow(HomePage, 92, Colors.Orange, "👹", "هيتبوكس عملاق للاعبين")
 UISetters["hitbox"] = makeSwitch(HitboxRow, Colors.Orange, function(on) State.hitbox = on end)
 createFrame(HitboxRow, UDim2.fromOffset(0, 48), UDim2.new(1, 0, 0, 2), Colors.Orange)
@@ -408,26 +445,17 @@ HitboxInput.FocusLost:Connect(function() setHitboxValue(tonumber(HitboxInput.Tex
 HitboxMinus.MouseButton1Click:Connect(function() setHitboxValue(Values.hitboxSize - 1, false) end)
 HitboxPlus.MouseButton1Click:Connect(function() setHitboxValue(Values.hitboxSize + 1, false) end)
 local hitboxDragging = false
-local function hitboxFromX(x)
-    setHitboxValue(1 + math.clamp((x - HitboxHit.AbsolutePosition.X) / HitboxHit.AbsoluteSize.X, 0, 1) * 49, false)
-end
+local function hitboxFromX(x) setHitboxValue(1 + math.clamp((x - HitboxHit.AbsolutePosition.X) / HitboxHit.AbsoluteSize.X, 0, 1) * 49, false) end
 HitboxHit.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        hitboxDragging = true; hitboxFromX(i.Position.X)
-    end
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then hitboxDragging = true; hitboxFromX(i.Position.X) end
 end)
 bind(UserInputService.InputChanged, function(i)
-    if hitboxDragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
-        hitboxFromX(i.Position.X)
-    end
+    if hitboxDragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then hitboxFromX(i.Position.X) end
 end)
 bind(UserInputService.InputEnded, function(i)
-    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        hitboxDragging = false
-    end
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then hitboxDragging = false end
 end)
 
--- FOV
 local FOVRow = makeRow(HomePage, 48, Colors.Blue, "🔭", "زاوية الرؤية")
 local FOVInput = createTextBox(FOVRow, tostring(Values.fov), 16, UDim2.new(1, -140, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(6, 12, 30), Colors.Blue)
 UISetters["fov"] = makeSwitch(FOVRow, Colors.Blue, function(on) State.fov = on end)
@@ -437,7 +465,6 @@ FOVInput.FocusLost:Connect(function()
     FOVInput.Text = tostring(Values.fov)
 end)
 
--- Zoom
 local ZoomRow = makeRow(HomePage, 48, Colors.Cyan, "🔍", "تكبير مفتوح")
 local ZoomInput = createTextBox(ZoomRow, tostring(Values.zoom), 16, UDim2.new(1, -140, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(6, 12, 30), Colors.Cyan)
 UISetters["zoom"] = makeSwitch(ZoomRow, Colors.Cyan, function(on) State.zoom = on end)
@@ -451,46 +478,86 @@ UISetters["freecam"] = makeSwitch(makeRow(HomePage, 48, Colors.Purple, "🎬", "
 UISetters["noshake"] = makeSwitch(makeRow(HomePage, 48, Colors.Cyan, "📳", "منع اهتزاز الكاميرا"), Colors.Cyan, function(on) State.noshake = on end)
 UISetters["fullbright"] = makeSwitch(makeRow(HomePage, 48, Colors.Orange, "☀️", "إضاءة كاملة"), Colors.Orange, function(on) State.fullbright = on end)
 
+-- ⚡ زر تخفيف اللاق
+UISetters["lagReducer"] = makeSwitch(makeRow(HomePage, 48, Colors.Pink, "⚡", "تخفيف اللاق (Anti-Lag)"), Colors.Pink, function(on)
+    if on then
+        if enableLagReducer then enableLagReducer() end
+    else
+        if disableLagReducer then disableLagReducer() end
+    end
+end)
+
 -- ================================================================================
--- تبويب الزراعة 🌱
+-- تبويب الزراعة
 -- ================================================================================
 UISetters["noclip"] = makeSwitch(makeRow(FarmPage, 48, Colors.Blue, "🧱", "عبور الجدران"), Colors.Blue, function(on)
     State.noclip = on
     if not on then
-        -- استرجاع
         local c = ch()
-        if c then
-            for _, p in ipairs(c:GetDescendants()) do
-                if p:IsA("BasePart") then p.CanCollide = true end
-            end
-        end
+        if c then for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = true end
+        end end
     end
 end)
 
 UISetters["autoRoll"] = makeSwitch(makeRow(FarmPage, 48, Colors.Orange, "🎲", "Roll تلقائي"), Colors.Orange, function(on) State.autoRoll = on end)
-
 UISetters["autoCollect"] = makeSwitch(makeRow(FarmPage, 48, Colors.Green, "💰", "جمع المال تلقائي"), Colors.Green, function(on) State.autoCollect = on end)
-
-UISetters["autoSteal"] = makeSwitch(makeRow(FarmPage, 48, Color3.fromRGB(255, 100, 200), "🌱", "سرقة تلقائية"), Color3.fromRGB(255, 100, 200), function(on) State.autoSteal = on end)
-
+UISetters["autoSteal"] = makeSwitch(makeRow(FarmPage, 48, Colors.Pink, "🌱", "سرقة تلقائية"), Colors.Pink, function(on) State.autoSteal = on end)
 UISetters["espPlants"] = makeSwitch(makeRow(FarmPage, 48, Color3.fromRGB(0, 255, 100), "🌿", "ESP النباتات"), Color3.fromRGB(0, 255, 100), function(on) State.espPlants = on end)
-
 UISetters["espPlayers"] = makeSwitch(makeRow(FarmPage, 48, Color3.fromRGB(255, 100, 100), "👥", "ESP اللاعبين"), Color3.fromRGB(255, 100, 100), function(on) State.espPlayers = on end)
 
--- زر إعادة فحص Remotes
-local ScanRow = makeRow(FarmPage, 60, Colors.Purple, "🔄", "إعادة فحص Remotes")
-local ScanBtn = createButton(ScanRow, "فحص", 14, UDim2.new(1, -90, 0, 15), UDim2.fromOffset(70, 30), Color3.fromRGB(50, 20, 90))
-addCorner(ScanBtn, UDim.new(0, 8)); addStroke(ScanBtn, Colors.Purple, 2)
+-- زر إعادة الفحص
+local ScanRow = makeRow(FarmPage, 68, Colors.Purple, "🔄", "فحص اللعبة + طباعة الكونسول")
+local ScanBtn = createButton(ScanRow, "🔍 فحص الآن", 13, UDim2.fromOffset(10, 40), UDim2.fromOffset(110, 24), Color3.fromRGB(50, 20, 90))
+addCorner(ScanBtn, UDim.new(0, 6)); addStroke(ScanBtn, Colors.Purple, 1.5)
+local DiagBtn = createButton(ScanRow, "📋 تشخيص", 13, UDim2.fromOffset(126, 40), UDim2.fromOffset(90, 24), Color3.fromRGB(20, 60, 90))
+addCorner(DiagBtn, UDim.new(0, 6)); addStroke(DiagBtn, Colors.Cyan, 1.5)
+
 ScanBtn.MouseButton1Click:Connect(function()
-    scanRemotes()
+    fullScan()
+    ScanBtn.Text = "✓ اكتمل"
+    task.delay(1.5, function() if ScanBtn and ScanBtn.Parent then ScanBtn.Text = "🔍 فحص الآن" end end)
+    print("═══════ نتيجة الفحص ═══════")
+    print("📡 Remotes: " .. #Farm.remotes)
+    print("🖥️ أزرار: " .. #Farm.buttons)
+    print("🌱 نباتات: " .. #Farm.plantParts)
+end)
+
+DiagBtn.MouseButton1Click:Connect(function()
+    print("═══════════ 📋 تشخيص كامل ═══════════")
+    
+    print("\n📡 [Remotes] — المجموع: " .. #Farm.remotes)
+    for i, v in ipairs(Farm.remotes) do
+        if i <= 40 then print("  " .. i .. ". " .. v:GetFullName()) end
+    end
+    if #Farm.remotes > 40 then print("  ... و " .. (#Farm.remotes - 40) .. " أخرى") end
+    
+    print("\n🎯 [تخمينات مهمة]")
+    for name, remote in pairs(Farm.guessedRemotes) do
+        print("  • " .. name .. " → " .. remote.Name)
+    end
+    
+    print("\n🖥️ [أزرار قابلة للنقر] — المجموع: " .. #Farm.buttons)
     local count = 0
-    for _ in pairs(Remotes.list) do count = count + 1 end
-    ScanBtn.Text = "✓ " .. count
-    task.delay(2, function()
-        if ScanBtn and ScanBtn.Parent then ScanBtn.Text = "فحص" end
-    end)
-    print("═══ Remotes المكتشفة ═══")
-    for name, _ in pairs(Remotes.list) do print("  •", name) end
+    for _, b in ipairs(Farm.buttons) do
+        local txt = b.Text or ""
+        if #txt > 0 and #txt < 30 and b.Visible then
+            count = count + 1
+            if count <= 25 then
+                print("  " .. count .. ". [" .. b.Name .. "] \"" .. txt .. "\"")
+            end
+        end
+    end
+    if count > 25 then print("  ... و " .. (count - 25) .. " أخرى") end
+    
+    print("\n🌱 [نباتات في Workspace] — المجموع: " .. #Farm.plantParts)
+    for i, p in ipairs(Farm.plantParts) do
+        if i <= 15 then print("  " .. i .. ". " .. p:GetFullName()) end
+    end
+    if #Farm.plantParts > 15 then print("  ... و " .. (#Farm.plantParts - 15) .. " أخرى") end
+    
+    print("\n═══════ انتهى التشخيص ═══════")
+    print("👆 انسخ كل اللي فوق وأرسله")
 end)
 
 -- ================================================================================
@@ -531,14 +598,6 @@ addCorner(LoadBtn, UDim.new(0, 8))
 local ClearBtn = createButton(SaveRow, "مسح", 14, UDim2.fromOffset(160, 9), UDim2.fromOffset(50, 30), Color3.fromRGB(90, 20, 30))
 addCorner(ClearBtn, UDim.new(0, 8))
 
-local function resetSaveLabel()
-    if not IsAlive then return end
-    pcall(function()
-        SaveStatusLabel.Text = "اضغط حفظ أو استرجاع"
-        SaveStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    end)
-end
-
 SaveBtn.MouseButton1Click:Connect(function()
     if not CanSave then SaveStatusLabel.Text = "غير مدعوم" return end
     local data = {State = State, Values = Values}
@@ -547,50 +606,32 @@ SaveBtn.MouseButton1Click:Connect(function()
         pcall(function() writefile(SAVE_FILE, enc) end)
         SaveStatusLabel.Text = "✅ تم الحفظ"
         SaveStatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
-        task.delay(2, resetSaveLabel)
-    else
-        SaveStatusLabel.Text = "❌ فشل"
-        SaveStatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+        task.delay(2, function() SaveStatusLabel.Text = "اضغط حفظ أو استرجاع" SaveStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200) end)
     end
 end)
 LoadBtn.MouseButton1Click:Connect(function()
-    if not CanSave then SaveStatusLabel.Text = "غير مدعوم" return end
+    if not CanSave then return end
     if not isfile(SAVE_FILE) then SaveStatusLabel.Text = "لا يوجد محفوظات" return end
     local ok, content = pcall(function() return readfile(SAVE_FILE) end)
-    if not ok or not content then return end
+    if not ok then return end
     local ok2, decoded = pcall(function() return HttpService:JSONDecode(content) end)
-    if not ok2 or not decoded then return end
+    if not ok2 then return end
     if decoded.State then
         for k, v in pairs(decoded.State) do
-            if State[k] ~= nil then
-                State[k] = v
-                if UISetters[k] then UISetters[k](v) end
-            end
+            if State[k] ~= nil then State[k] = v if UISetters[k] then UISetters[k](v) end end
         end
     end
-    if decoded.Values then
-        for k, v in pairs(decoded.Values) do
-            if Values[k] ~= nil then Values[k] = v end
-        end
-    end
+    if decoded.Values then for k, v in pairs(decoded.Values) do if Values[k] ~= nil then Values[k] = v end end end
     pcall(function() setSpeed(Values.speed, false) end)
     pcall(function() setHitboxValue(Values.hitboxSize, true) end)
-    pcall(function() JumpInput.Text = tostring(Values.jumpPower) end)
-    pcall(function() FOVInput.Text = tostring(Values.fov) end)
-    pcall(function() ZoomInput.Text = tostring(Values.zoom) end)
     pcall(function() setScale(Values.uiScale) end)
-    pcall(function() TranspInput.Text = tostring(math.floor(Values.uiTransparency * 100)) end)
-    pcall(function() MainFrame.BackgroundTransparency = Values.uiTransparency end)
     SaveStatusLabel.Text = "✅ تم الاسترجاع"
     SaveStatusLabel.TextColor3 = Color3.fromRGB(0, 200, 255)
-    task.delay(2, resetSaveLabel)
 end)
 ClearBtn.MouseButton1Click:Connect(function()
     if not CanSave then return end
     pcall(function() delfile(SAVE_FILE) end)
     SaveStatusLabel.Text = "🗑️ تم المسح"
-    SaveStatusLabel.TextColor3 = Color3.fromRGB(255, 170, 0)
-    task.delay(2, resetSaveLabel)
 end)
 
 local ResetRow = makeRow(SettingsPage, 48, Colors.Red, "🔄", "إعادة الشخصية")
@@ -599,17 +640,11 @@ addCorner(ResetBtn, UDim.new(0, 8))
 local resetArmed = false
 ResetBtn.MouseButton1Click:Connect(function()
     if not resetArmed then
-        resetArmed = true
-        ResetBtn.Text = "تأكيد؟"
-        task.delay(3, function()
-            if not IsAlive then return end
-            pcall(function() resetArmed = false ResetBtn.Text = "🔄" end)
-        end)
+        resetArmed = true ResetBtn.Text = "تأكيد؟"
+        task.delay(3, function() if IsAlive then pcall(function() resetArmed = false ResetBtn.Text = "🔄" end) end end)
     else
-        resetArmed = false
-        ResetBtn.Text = "🔄"
-        local h = hu()
-        if h then h.Health = 0 end
+        resetArmed = false ResetBtn.Text = "🔄"
+        local h = hu() if h then h.Health = 0 end
     end
 end)
 
@@ -638,21 +673,18 @@ bind(RunService.RenderStepped, function(dt)
             pcall(function() ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue() + 0.5) end)
             local pos = "-"
             local c = LocalPlayer.Character
-            if c then
-                local r = c:FindFirstChild("HumanoidRootPart")
+            if c then local r = c:FindFirstChild("HumanoidRootPart")
                 if r then pos = math.floor(r.Position.X) .. ", " .. math.floor(r.Position.Y) .. ", " .. math.floor(r.Position.Z) end
             end
-            StatsLabel.Text = "الإطارات: " .. fps
-                .. "\nزمن الاستجابة: " .. ping .. " ميث"
+            StatsLabel.Text = "الإطارات: " .. fps .. "\nزمن الاستجابة: " .. ping .. " ميث"
                 .. "\nعدد اللاعبين: " .. #Players:GetPlayers() .. "/" .. Players.MaxPlayers
-                .. "\nالشخصية: " .. LocalPlayer.DisplayName
-                .. "\nالموقع: " .. pos
+                .. "\nالشخصية: " .. LocalPlayer.DisplayName .. "\nالموقع: " .. pos
         end
     end
 end)
 
 -- ================================================================================
--- القائمة الجانبية - التبويبات
+-- القائمة الجانبية
 -- ================================================================================
 local TabList = {}
 local function showPage(page)
@@ -689,40 +721,28 @@ FloatingButton.Visible = false
 FloatingButton.BorderSizePixel = 0
 addCorner(FloatingButton, UDim.new(1, 0))
 addStroke(FloatingButton, Colors.Blue, 5)
-local FloatCrown = createLabel(FloatingButton, "👑", 26, UDim2.new(1, -36, 0, -16), UDim2.fromOffset(34, 30), Color3.fromRGB(80, 190, 255))
-FloatCrown.ZIndex = 3
+createLabel(FloatingButton, "👑", 26, UDim2.new(1, -36, 0, -16), UDim2.fromOffset(34, 30), Color3.fromRGB(80, 190, 255)).ZIndex = 3
+
 local fDrag, fStart, fOrigin, fMoved = false, nil, nil, false
-local function isPress(i)
-    return i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1
-end
+local function isPress(i) return i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 end
 FloatingButton.InputBegan:Connect(function(i)
-    if isPress(i) then
-        fDrag = true; fStart = i.Position; fOrigin = FloatingButton.Position; fMoved = false
-    end
+    if isPress(i) then fDrag = true; fStart = i.Position; fOrigin = FloatingButton.Position; fMoved = false end
 end)
 bind(UserInputService.InputChanged, function(i)
     if fDrag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
         local dx = i.Position.X - fStart.X
         local dy = i.Position.Y - fStart.Y
         if math.abs(dx) + math.abs(dy) > 10 then fMoved = true end
-        if fMoved then
-            FloatingButton.Position = UDim2.new(fOrigin.X.Scale, fOrigin.X.Offset + dx, fOrigin.Y.Scale, fOrigin.Y.Offset + dy)
-        end
+        if fMoved then FloatingButton.Position = UDim2.new(fOrigin.X.Scale, fOrigin.X.Offset + dx, fOrigin.Y.Scale, fOrigin.Y.Offset + dy) end
     end
 end)
 bind(UserInputService.InputEnded, function(i)
     if fDrag and isPress(i) then
         fDrag = false
-        if not fMoved then
-            FloatingButton.Visible = false
-            MainFrame.Visible = true
-        end
+        if not fMoved then FloatingButton.Visible = false MainFrame.Visible = true end
     end
 end)
-CloseButton.MouseButton1Click:Connect(function()
-    MainFrame.Visible = false
-    FloatingButton.Visible = true
-end)
+CloseButton.MouseButton1Click:Connect(function() MainFrame.Visible = false FloatingButton.Visible = true end)
 MinimizeButton.MouseButton1Click:Connect(function()
     IsMinimized = not IsMinimized
     if IsMinimized then
@@ -745,47 +765,116 @@ bind(UserInputService.InputBegan, function(i, gp)
         MainFrame.Visible = show
         FloatingButton.Visible = not show
     end
-    if UserInputService:IsKeyDown(Enum.KeyCode.RightControl) then
-        local map = {
-            [Enum.KeyCode.One] = "fly",
-            [Enum.KeyCode.Two] = "infJump",
-            [Enum.KeyCode.Three] = "speed",
-            [Enum.KeyCode.Four] = "god",
-            [Enum.KeyCode.Five] = "hitbox",
-        }
-        local key = map[i.KeyCode]
-        if key then
-            State[key] = not State[key]
-            if UISetters[key] then UISetters[key](State[key]) end
-        end
-    end
 end)
 
 -- ════════════════════════════════════════════════════════════════════════════════
--- ⚡ تنفيذ الميزات (بعد كل عناصر الواجهة)
+-- تنفيذ الميزات
 -- ════════════════════════════════════════════════════════════════════════════════
 
+-- ⚡ ============ تخفيف اللاق ============
+local LagState = { enabled = false, originals = {}, connections = {} }
+
+function enableLagReducer()
+    if LagState.enabled then return end
+    LagState.enabled = true
+    LagState.originals = {}
+    LagState.originals.Brightness = Lighting.Brightness
+    LagState.originals.GlobalShadows = Lighting.GlobalShadows
+    LagState.originals.FogEnd = Lighting.FogEnd
+    LagState.originals.QualityLevel = settings().Rendering.QualityLevel
+
+    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+
+    Lighting.Brightness = 1
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 100
+    Lighting.ShadowSoftness = 0
+
+    for _, v in ipairs(Lighting:GetChildren()) do
+        if v:IsA("PostEffect") or v:IsA("Atmosphere") then
+            if v.Enabled then LagState.originals[v] = true v.Enabled = false end
+        end
+    end
+
+    LagState.originals.particles = {}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
+            if v.Enabled then LagState.originals.particles[v] = true v.Enabled = false end
+        end
+    end
+
+    LagState.originals.decals = {}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("Decal") or v:IsA("Texture") then
+            if v.Transparency < 1 then LagState.originals.decals[v] = v.Transparency v.Transparency = 1 end
+        end
+    end
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character then
+            for _, v in ipairs(p.Character:GetDescendants()) do
+                if v:IsA("MeshPart") then v.RenderFidelity = Enum.RenderFidelity.Performance
+                elseif v:IsA("Decal") or v:IsA("Texture") then v.Transparency = 1
+                elseif v:IsA("ParticleEmitter") or v:IsA("Trail") then v.Enabled = false end
+            end
+        end
+    end
+
+    local sky = Lighting:FindFirstChildOfClass("Sky")
+    if sky then LagState.originals.sky = sky LagState.originals.skyParent = sky.Parent sky.Parent = nil end
+
+    local conn = workspace.DescendantAdded:Connect(function(v)
+        if not LagState.enabled then return end
+        if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
+            LagState.originals.particles[v] = true v.Enabled = false
+        elseif v:IsA("Decal") or v:IsA("Texture") then
+            LagState.originals.decals[v] = v.Transparency v.Transparency = 1
+        end
+    end)
+    table.insert(LagState.connections, conn)
+    print("⚡ تم تفعيل تخفيف اللاق")
+end
+
+function disableLagReducer()
+    if not LagState.enabled then return end
+    LagState.enabled = false
+    pcall(function()
+        if LagState.originals.QualityLevel then settings().Rendering.QualityLevel = LagState.originals.QualityLevel
+        else settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic end
+    end)
+    Lighting.Brightness = LagState.originals.Brightness or 2
+    Lighting.GlobalShadows = LagState.originals.GlobalShadows or true
+    Lighting.FogEnd = LagState.originals.FogEnd or 1e5
+
+    for v, _ in pairs(LagState.originals) do
+        if typeof(v) == "Instance" and v.Parent then pcall(function() v.Enabled = true end) end
+    end
+    if LagState.originals.particles then
+        for v, _ in pairs(LagState.originals.particles) do
+            if v and v.Parent then pcall(function() v.Enabled = true end) end
+        end
+    end
+    if LagState.originals.decals then
+        for v, t in pairs(LagState.originals.decals) do
+            if v and v.Parent then pcall(function() v.Transparency = t end) end
+        end
+    end
+    if LagState.originals.sky and LagState.originals.skyParent then
+        pcall(function() LagState.originals.sky.Parent = LagState.originals.skyParent end)
+    end
+    for _, c in ipairs(LagState.connections) do pcall(function() c:Disconnect() end) end
+    LagState.connections = {}
+    print("🔄 تم إيقاف تخفيف اللاق")
+end
+
 -- ============ Noclip ============
-local savedCollide = {}
-local function applyNoclip()
+RunService.Stepped:Connect(function()
+    if not State.noclip then return end
     local c = ch()
     if not c then return end
     for _, p in ipairs(c:GetDescendants()) do
-        if p:IsA("BasePart") and p.CanCollide then
-            if savedCollide[p] == nil then savedCollide[p] = true end
-            p.CanCollide = false
-        end
+        if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
     end
-end
-local function restoreCollide()
-    for part, _ in pairs(savedCollide) do
-        if part and part.Parent then part.CanCollide = true end
-    end
-    savedCollide = {}
-end
-
-RunService.Stepped:Connect(function()
-    if State.noclip then applyNoclip() end
 end)
 
 -- ============ Fly ============
@@ -825,38 +914,30 @@ RunService.Heartbeat:Connect(function()
     if h and h.WalkSpeed ~= Values.speed then h.WalkSpeed = Values.speed end
 end)
 
--- ============ Jump Power ============
+-- ============ Jump ============
 RunService.Heartbeat:Connect(function()
     if not State.jump then return end
     local h = hu()
-    if h and h.UseJumpPower and h.JumpPower ~= Values.jumpPower then
-        h.JumpPower = Values.jumpPower
-    end
+    if h and h.UseJumpPower and h.JumpPower ~= Values.jumpPower then h.JumpPower = Values.jumpPower end
 end)
 
--- ============ Infinite Jump ============
+-- ============ Inf Jump ============
 bind(UserInputService.JumpRequest, function()
-    if State.infJump then
-        local h = hu()
-        if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
-    end
+    if State.infJump then local h = hu() if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end end
 end)
 
--- ============ God Mode ============
+-- ============ God ============
 task.spawn(function()
     while true do
         task.wait(0.5)
         if State.god then
             local h = hu()
-            if h then
-                h.MaxHealth = math.huge
-                if h.Health < h.MaxHealth then h.Health = h.MaxHealth end
-            end
+            if h then h.MaxHealth = math.huge if h.Health < h.MaxHealth then h.Health = h.MaxHealth end end
         end
     end
 end)
 
--- ============ Hitbox Expander ============
+-- ============ Hitbox ============
 local savedSizes = {}
 task.spawn(function()
     while true do
@@ -869,13 +950,9 @@ task.spawn(function()
                         if savedSizes[hrp] == nil then savedSizes[hrp] = hrp.Size end
                         local s = Values.hitboxSize
                         hrp.Size = Vector3.new(s, s, s)
-                        hrp.Transparency = 1
-                        hrp.CanCollide = false
-                        hrp.Massless = true
+                        hrp.CanCollide = false; hrp.Massless = true
                     elseif savedSizes[hrp] then
                         hrp.Size = savedSizes[hrp]
-                        hrp.Transparency = 1
-                        hrp.CanCollide = false
                         savedSizes[hrp] = nil
                     end
                 end
@@ -888,118 +965,66 @@ end)
 RunService.RenderStepped:Connect(function()
     local cam = workspace.CurrentCamera
     if cam then
-        if State.fov then cam.FieldOfView = Values.fov
-        else cam.FieldOfView = 70 end
+        if State.fov then cam.FieldOfView = Values.fov else cam.FieldOfView = 70 end
     end
 end)
 
 -- ============ Zoom ============
 RunService.RenderStepped:Connect(function()
-    if State.zoom then
-        LocalPlayer.CameraMaxZoomDistance = Values.zoom
-    else
-        LocalPlayer.CameraMaxZoomDistance = 400
-    end
-end)
-
--- ============ No Shake ============
-local baseCamPos = nil
-RunService.RenderStepped:Connect(function()
-    if not State.noshake then return end
-    local cam = workspace.CurrentCamera
-    if cam then
-        -- تقليل الاهتزاز
-        pcall(function()
-            cam.CFrame = cam.CFrame
-        end)
-    end
+    if State.zoom then LocalPlayer.CameraMaxZoomDistance = Values.zoom
+    else LocalPlayer.CameraMaxZoomDistance = 400 end
 end)
 
 -- ============ Fullbright ============
-local bright = {Brightness = 0, ClockTime = 0, Ambient = nil, OutdoorAmbient = nil, FogEnd = 0}
-local function applyBright()
-    if not bright.Saved then
-        bright.Brightness = Lighting.Brightness
-        bright.ClockTime = Lighting.ClockTime
-        bright.Ambient = Lighting.Ambient
-        bright.OutdoorAmbient = Lighting.OutdoorAmbient
-        bright.FogEnd = Lighting.FogEnd
-        bright.Saved = true
-    end
-    Lighting.Brightness = 3
-    Lighting.ClockTime = 14
-    Lighting.Ambient = Color3.fromRGB(200, 200, 200)
-    Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
-    Lighting.FogEnd = 1e6
-end
-local function restoreBright()
-    if bright.Saved then
-        Lighting.Brightness = bright.Brightness
-        Lighting.ClockTime = bright.ClockTime
-        Lighting.Ambient = bright.Ambient
-        Lighting.OutdoorAmbient = bright.OutdoorAmbient
-        Lighting.FogEnd = bright.FogEnd
-    end
-end
+local brightSaved = false
+local brightData = {}
 task.spawn(function()
-    local lastState = false
     while true do
         task.wait(0.5)
-        if State.fullbright and not lastState then applyBright(); lastState = true
-        elseif not State.fullbright and lastState then restoreBright(); lastState = false end
+        if State.fullbright and not brightSaved then
+            brightData.B = Lighting.Brightness; brightData.C = Lighting.ClockTime
+            brightData.A = Lighting.Ambient; brightData.O = Lighting.OutdoorAmbient
+            brightData.F = Lighting.FogEnd
+            Lighting.Brightness = 3; Lighting.ClockTime = 14
+            Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+            Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+            Lighting.FogEnd = 1e6
+            brightSaved = true
+        elseif not State.fullbright and brightSaved then
+            Lighting.Brightness = brightData.B or 2
+            Lighting.ClockTime = brightData.C or 14
+            Lighting.Ambient = brightData.A or Color3.fromRGB(70, 70, 70)
+            Lighting.OutdoorAmbient = brightData.O or Color3.fromRGB(128, 128, 128)
+            Lighting.FogEnd = brightData.F or 1e5
+            brightSaved = false
+        end
     end
 end)
 
--- ============ دوال مساعدة للزراعة ============
-local function findButton(keywords)
-    if type(keywords) == "string" then keywords = {keywords} end
-    for _, gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
-        for _, b in ipairs(gui:GetDescendants()) do
-            if b:IsA("TextButton") or b:IsA("ImageButton") then
-                local name = b.Name:lower()
-                local txt = (b.Text or ""):lower()
-                for _, kw in ipairs(keywords) do
-                    local k = kw:lower()
-                    if (name:find(k) or txt:find(k)) and b.Visible then return b end
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function pressButton(btn)
-    if not btn or not btn.Parent then return false end
-    local ok = pcall(function() btn:Activate() end)
-    return ok
-end
-
-local function firePrompt(prompt)
-    if not prompt or not prompt.Parent then return end
-    pcall(function()
-        local hold = prompt.HoldDuration or 0
-        prompt:InputHoldBegin()
-        if hold > 0 then task.wait(hold) end
-        prompt:InputHoldEnd()
-    end)
-end
-
 -- ============ Auto Roll ============
 task.spawn(function()
-    local rollBtn, lastRoll = nil, 0
+    local lastRoll = 0
     while true do
         task.wait(0.15)
         if State.autoRoll then
-            if not rollBtn or not rollBtn.Parent then
-                rollBtn = findButton({"roll", "spin", "اسحب", "لف"})
-            end
             local now = tick()
-            if rollBtn and (now - lastRoll >= Values.autoRollDelay) then
+            if now - lastRoll >= Values.autoRollDelay then
                 lastRoll = now
-                pressButton(rollBtn)
-            elseif Remotes.roll and (now - lastRoll >= Values.autoRollDelay) then
-                lastRoll = now
-                pcall(function() Remotes.roll:FireServer() end)
+                local found = false
+                for _, b in ipairs(Farm.buttons) do
+                    if b and b.Parent and b.Visible then
+                        local txt = (b.Text or ""):lower()
+                        local nm = b.Name:lower()
+                        if txt:find("roll") or txt:find("spin") or nm:find("roll") or nm:find("spin") then
+                            pcall(function() b:Activate() end)
+                            found = true
+                            break
+                        end
+                    end
+                end
+                if not found and Farm.guessedRemotes.roll then
+                    pcall(function() Farm.guessedRemotes.roll:FireServer() end)
+                end
             end
         end
     end
@@ -1007,71 +1032,60 @@ end)
 
 -- ============ Auto Collect ============
 task.spawn(function()
-    local collectBtn, lastCollect = nil, 0
+    local lastCollect = 0
     while true do
         task.wait(0.3)
         if State.autoCollect then
-            if not collectBtn or not collectBtn.Parent then
-                collectBtn = findButton({"collect", "claim", "grab", "money", "cash", "جمع"})
-            end
             local now = tick()
-            if collectBtn and (now - lastCollect >= Values.autoCollectDelay) then
+            if now - lastCollect >= Values.autoCollectDelay then
                 lastCollect = now
-                pressButton(collectBtn)
-            end
-            -- محاولة Remote
-            if Remotes.collectFruit and (now - lastCollect >= Values.autoCollectDelay) then
-                lastCollect = now
-                pcall(function() Remotes.collectFruit:FireServer() end)
+                for _, b in ipairs(Farm.buttons) do
+                    if b and b.Parent and b.Visible then
+                        local txt = (b.Text or ""):lower()
+                        local nm = b.Name:lower()
+                        if txt:find("collect") or txt:find("claim") or txt:find("جمع")
+                        or nm:find("collect") or nm:find("claim") then
+                            pcall(function() b:Activate() end)
+                            break
+                        end
+                    end
+                end
+                if Farm.guessedRemotes.collectFruit then
+                    pcall(function() Farm.guessedRemotes.collectFruit:FireServer() end)
+                end
             end
         end
     end
 end)
 
 -- ============ Auto Steal ============
-local function getNearestFruit()
-    local root = rt()
-    if not root then return nil end
-    local best, bestD = nil, 400
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") or (obj:IsA("Model") and obj.PrimaryPart) then
-            local n = obj.Name:lower()
-            if n:find("fruit") or n:find("plant") or n:find("crop")
-            or n:find("tree") or n:find("harvest") or n:find("نبت") then
-                local pos = obj:IsA("BasePart") and obj.Position
-                    or (obj.PrimaryPart and obj.PrimaryPart.Position)
-                if pos then
-                    local d = dist3(pos, root.Position)
-                    if d < bestD then best, bestD = obj, d end
-                end
-            end
-        end
-    end
-    return best
-end
-
 task.spawn(function()
     while true do
         task.wait(Values.autoStealDelay)
         if State.autoSteal then
-            local target = getNearestFruit()
-            local root = rt()
-            if target and root then
-                local pos = target:IsA("BasePart") and target.Position
-                    or (target.PrimaryPart and target.PrimaryPart.Position)
-                if pos then
-                    -- حركة سلسة (أقل كشف)
-                    local goal = CFrame.new(pos + Vector3.new(0, 3, 0))
-                    root.CFrame = root.CFrame:Lerp(goal, 0.6)
-
-                    -- محاولة ProximityPrompt
-                    for _, p in ipairs(target:GetDescendants()) do
-                        if p:IsA("ProximityPrompt") then firePrompt(p) end
+            scanPlants()
+            if #Farm.plantParts > 0 then
+                local root = rt()
+                if root then
+                    local target = Farm.plantParts[1]
+                    local pos = target:IsA("BasePart") and target.Position or (target.PrimaryPart and target.PrimaryPart.Position)
+                    if pos then
+                        root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+                        local h = hu()
+                        if h then
+                            for _, d in ipairs(target:GetDescendants()) do
+                                if d:IsA("ProximityPrompt") then
+                                    pcall(function()
+                                        d:InputHoldBegin()
+                                        task.wait(d.HoldDuration or 0)
+                                        d:InputHoldEnd()
+                                    end)
+                                end
+                            end
+                        end
+                        if Farm.guessedRemotes.steal then pcall(function() Farm.guessedRemotes.steal:FireServer(target) end) end
+                        if Farm.guessedRemotes.collectFruit then pcall(function() Farm.guessedRemotes.collectFruit:FireServer(target) end) end
                     end
-
-                    -- محاولة Remotes
-                    if Remotes.steal then pcall(function() Remotes.steal:FireServer(target) end) end
-                    if Remotes.collectFruit then pcall(function() Remotes.collectFruit:FireServer(target) end) end
                 end
             end
         end
@@ -1080,51 +1094,29 @@ end)
 
 -- ============ ESP ============
 local espBoxes = {}
-
 local function createESP(obj, color)
     if not obj or not obj.Parent or espBoxes[obj] then return end
     local adornee = obj:IsA("BasePart") and obj or obj.PrimaryPart
-    if not adornee then
-        local ok, pivot = pcall(function() return obj:GetPivot() end)
-        if not ok then return end
-        local tmp = Instance.new("Part")
-        tmp.Anchored = true; tmp.CanCollide = false; tmp.Transparency = 1
-        tmp.Size = Vector3.new(2, 2, 2); tmp.CFrame = pivot; tmp.Parent = ScreenGui
-        adornee = tmp
-    end
-    local size = adornee.Size or Vector3.new(3, 3, 3)
+    if not adornee then return end
     local box = Instance.new("BoxHandleAdornment")
-    box.Size = size + Vector3.new(0.5, 0.5, 0.5)
+    box.Size = adornee.Size + Vector3.new(0.5, 0.5, 0.5)
     box.Adornee = adornee
-    box.AlwaysOnTop = true
-    box.ZIndex = 5
-    box.Transparency = 0.6
-    box.Color3 = color
+    box.AlwaysOnTop = true; box.ZIndex = 5
+    box.Transparency = 0.6; box.Color3 = color
     box.Parent = ScreenGui
     espBoxes[obj] = box
 end
-
 local function clearESP()
-    for _, box in pairs(espBoxes) do
-        if box and box.Parent then box:Destroy() end
-    end
+    for _, box in pairs(espBoxes) do if box and box.Parent then box:Destroy() end end
     espBoxes = {}
 end
-
 task.spawn(function()
     while true do
         task.wait(0.8)
-        local anyESP = State.espPlants or State.espPlayers
-        if anyESP then
+        if State.espPlants or State.espPlayers then
             if State.espPlants then
-                for _, obj in ipairs(workspace:GetDescendants()) do
-                    if obj:IsA("BasePart") or (obj:IsA("Model") and obj.PrimaryPart) then
-                        local n = obj.Name:lower()
-                        if n:find("fruit") or n:find("plant") or n:find("crop") or n:find("نبت") then
-                            createESP(obj, Color3.fromRGB(0, 255, 100))
-                        end
-                    end
-                end
+                scanPlants()
+                for _, obj in ipairs(Farm.plantParts) do createESP(obj, Color3.fromRGB(0, 255, 100)) end
             end
             if State.espPlayers then
                 for _, p in ipairs(Players:GetPlayers()) do
@@ -1141,18 +1133,21 @@ task.spawn(function()
 end)
 
 -- ================================================================================
--- الحفظ عند الإغلاق
+-- Cleanup
 -- ================================================================================
 _G.KhalilCleanup = function()
     IsAlive = false
     for _, c in ipairs(Connections) do pcall(function() c:Disconnect() end) end
     Connections = {}
+    if LagState.connections then for _, c in ipairs(LagState.connections) do pcall(function() c:Disconnect() end) end end
     pcall(function() ScreenGui:Destroy() end)
 end
 
-print("=====================================================")
-print("  🌱 سكربت خليل | Khalil Script v3.0")
-print("  by خليل 👑")
-print("  Remotes مكتشفة: " .. tostring(#Remotes.list))
-print("  RightShift = إخفاء/إظهار | RightCtrl+1-5 = تفعيل سريع")
-print("=====================================================")
+print("═══════════════════════════════════════════════")
+print("🌱 سكربت خليل v4.0 شغال")
+print("📡 Remotes: " .. #Farm.remotes)
+print("🖥️ أزرار: " .. #Farm.buttons)
+print("🌱 نباتات: " .. #Farm.plantParts)
+print("⚡ اضغط زر 'تخفيف اللاق' لتحسين الأداء")
+print("🔍 تبويب الزراعة → زر 'فحص الآن' أو '📋 تشخيص'")
+print("═══════════════════════════════════════════════")
