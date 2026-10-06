@@ -1,0 +1,808 @@
+-- ═══════════════════════════════════════════════════════════
+-- 🌱 سكربت خليل للنباتات v2.0 | Khalil Plant Farmer
+-- 🎮 Build a Base & Steal Plants (Game ID: 93801483388308)
+-- ═══════════════════════════════════════════════════════════
+
+local Players = game:GetService("Players")
+local RS = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local HS = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local plr = Players.LocalPlayer
+
+local function ch() return plr.Character end
+local function hu() local c = ch() return c and c:FindFirstChildOfClass("Humanoid") end
+local function rt() local c = ch() return c and c:FindFirstChild("HumanoidRootPart") end
+local function dist(a, b) return (a - b).Magnitude end
+
+-- ═══════════════════════════════════════════════════════════
+-- 1) الإعدادات + الحفظ
+-- ═══════════════════════════════════════════════════════════
+local CONFIG = "KhalilFarm.json"
+local DEFAULTS = {
+	speed = 80,
+	hideKey = "RightShift",
+	autoRollDelay = 0.3,
+	autoCollectDelay = 0.5,
+	autoStealDelay = 0.8,
+	stealRange = 400,
+	tpSmooth = true,
+}
+
+local function clone(t) local r = {} for k, v in pairs(t) do r[k] = v end return r end
+
+local function loadCfg()
+	local fb = clone(DEFAULTS)
+	if not (writefile and readfile and isfile) then return fb end
+	if not isfile(CONFIG) then return fb end
+	local ok, data = pcall(function() return HS:JSONDecode(readfile(CONFIG)) end)
+	if ok and type(data) == "table" then
+		for k, v in pairs(DEFAULTS) do if data[k] == nil then data[k] = v end end
+		return data
+	end
+	return fb
+end
+
+local cfg = loadCfg()
+
+local function saveCfg()
+	if not writefile then return end
+	pcall(function() writefile(CONFIG, HS:JSONEncode(cfg)) end)
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- 2) الحالة
+-- ═══════════════════════════════════════════════════════════
+local S = {
+	noclip = false,
+	fly = false,
+	autoRoll = false,
+	autoCollect = false,
+	autoSteal = false,
+	espPlants = false,
+	espPlayers = false,
+	espPets = false,
+}
+
+local flyUp, flyDown = false, false
+local FLY_SPEED = cfg.speed
+local bv, bg
+local hideKey = Enum.KeyCode[cfg.hideKey] or Enum.KeyCode.RightShift
+local savedCollide = {}
+local watchedChars = setmetatable({}, { __mode = "k" })
+local espBoxes = {}
+
+-- ═══════════════════════════════════════════════════════════
+-- 3) اكتشاف الـ Remotes
+-- ═══════════════════════════════════════════════════════════
+local Remotes = { folder = nil, list = {}, searchDone = false }
+
+local function scanRemotes()
+	Remotes.list = {}
+	Remotes.searchDone = true
+	local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
+
+	if remotesFolder then
+		for _, v in ipairs(remotesFolder:GetDescendants()) do
+			if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
+				local low = v.Name:lower()
+				Remotes.list[v.Name] = v
+				-- تصنيف
+				if low:find("collectfruit") or low:find("fruitpickup") then
+					Remotes.collectFruit = v
+				elseif low:find("roll") or low:find("spin") then
+					Remotes.roll = v
+				elseif low:find("steal") or low:find("take") then
+					Remotes.steal = v
+				elseif low:find("collect") and low:find("toggle") then
+					Remotes.autoCollectToggle = v
+				elseif low:find("plant") and low:find("place") then
+					Remotes.plantPlace = v
+				end
+			end
+		end
+	end
+	return Remotes
+end
+
+scanRemotes()
+
+-- ═══════════════════════════════════════════════════════════
+-- 4) الواجهة
+-- ═══════════════════════════════════════════════════════════
+local parent = (gethui and gethui()) or plr:WaitForChild("PlayerGui")
+
+local g = Instance.new("ScreenGui")
+g.Name = "KhalilFarm"
+g.ResetOnSpawn = false
+g.IgnoreGuiInset = true
+g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+g.Parent = parent
+
+local main = Instance.new("Frame", g)
+main.Size = UDim2.fromOffset(340, 450)
+main.Position = UDim2.new(0.5, -170, 0.5, -225)
+main.BackgroundColor3 = Color3.fromRGB(7, 12, 30)
+main.BorderSizePixel = 0
+main.Active = true
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 15)
+
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = Color3.fromRGB(0, 200, 100)
+stroke.Thickness = 2
+
+local title = Instance.new("TextLabel", main)
+title.Size = UDim2.new(1, 0, 0, 35)
+title.Position = UDim2.fromOffset(0, 5)
+title.BackgroundTransparency = 1
+title.Text = "🌱 خليل فارم v2.0"
+title.TextColor3 = Color3.fromRGB(120, 255, 150)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 20
+title.Active = true
+
+local statusLabel = Instance.new("TextLabel", main)
+statusLabel.Size = UDim2.new(1, -20, 0, 18)
+statusLabel.Position = UDim2.fromOffset(10, 38)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "⚪ جاهز — Remotes: " .. tostring(#Remotes.list ~= 0 and "تم" or "لم يتم")
+statusLabel.TextColor3 = Color3.fromRGB(180, 220, 255)
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 11
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+-- flyBtns (قبل mkBtn)
+local flyBtns = Instance.new("Frame", g)
+flyBtns.Size = UDim2.fromOffset(60, 130)
+flyBtns.Position = UDim2.new(1, -80, 0.5, -65)
+flyBtns.BackgroundTransparency = 1
+flyBtns.Visible = false
+
+local function mkFlyBtn(txt, y, isUp)
+	local b = Instance.new("TextButton", flyBtns)
+	b.Size = UDim2.fromOffset(60, 60)
+	b.Position = UDim2.fromOffset(0, y)
+	b.BackgroundColor3 = Color3.fromRGB(0, 220, 100)
+	b.BackgroundTransparency = 0.2
+	b.Text = txt
+	b.TextColor3 = Color3.new(1, 1, 1)
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 26
+	b.BorderSizePixel = 0
+	b.AutoButtonColor = false
+	Instance.new("UICorner", b).CornerRadius = UDim.new(1, 0)
+
+	local function press() if isUp then flyUp = true else flyDown = true end end
+	local function release() if isUp then flyUp = false else flyDown = false end end
+
+	b.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.Touch
+		or i.UserInputType == Enum.UserInputType.MouseButton1 then press() end
+	end)
+	b.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.Touch
+		or i.UserInputType == Enum.UserInputType.MouseButton1 then release() end
+	end)
+	b.MouseLeave:Connect(release)
+end
+mkFlyBtn("▲", 0, true)
+mkFlyBtn("▼", 70, false)
+
+-- دالة إنشاء زر
+local function mkBtn(y, txt, color, cb)
+	local b = Instance.new("TextButton", main)
+	b.Size = UDim2.new(1, -30, 0, 32)
+	b.Position = UDim2.fromOffset(15, y)
+	b.BackgroundColor3 = Color3.fromRGB(11, 16, 36)
+	b.Text = txt
+	b.TextColor3 = color
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 14
+	b.BorderSizePixel = 0
+	b.AutoButtonColor = false
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+	local s = Instance.new("UIStroke", b)
+	s.Color = color
+	s.Thickness = 1.5
+
+	local on = false
+	b.MouseButton1Click:Connect(function()
+		on = not on
+		b.BackgroundColor3 = on and color or Color3.fromRGB(11, 16, 36)
+		b.TextColor3 = on and Color3.fromRGB(0, 0, 0) or color
+		cb(on)
+	end)
+	return b
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- 5) Noclip
+-- ═══════════════════════════════════════════════════════════
+local function applyNoclip(c)
+	if not c then return end
+	for _, p in ipairs(c:GetDescendants()) do
+		if p:IsA("BasePart") then
+			if savedCollide[p] == nil then savedCollide[p] = p.CanCollide end
+			p.CanCollide = false
+		end
+	end
+end
+
+local function restoreCollide()
+	for part, state in pairs(savedCollide) do
+		if part and part.Parent then part.CanCollide = state end
+	end
+	savedCollide = {}
+end
+
+local function watchChar(c)
+	if not c or watchedChars[c] then return end
+	watchedChars[c] = true
+	c.DescendantAdded:Connect(function(p)
+		if S.noclip and p:IsA("BasePart") then
+			task.wait()
+			if p.Parent then
+				if savedCollide[p] == nil then savedCollide[p] = p.CanCollide end
+				p.CanCollide = false
+			end
+		end
+	end)
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- 6) دوال مساعدة آمنة (لا recursion، لا nil calls)
+-- ═══════════════════════════════════════════════════════════
+
+-- touch آمن — يستدعي TouchTransmitter فقط
+local function safeTouch(part, humanoid)
+	if not part or not part.Parent or not humanoid then return end
+	pcall(function()
+		for _, d in ipairs(part:GetChildren()) do
+			if d:IsA("TouchTransmitter") then
+				-- TouchTransmitter يُطلق تلقائياً عند لمس Part
+				-- الحل: نحرك الشخصية قربها فقط
+				break
+			end
+		end
+	end)
+end
+
+-- ProximityPrompt آمن
+local function firePrompt(prompt)
+	if not prompt or not prompt.Parent then return end
+	pcall(function()
+		local hold = prompt.HoldDuration or 0
+		prompt:InputHoldBegin()
+		if hold > 0 then task.wait(hold) end
+		prompt:InputHoldEnd()
+	end)
+end
+
+-- البحث عن زر بالاسم أو النص
+local function findButton(keywords)
+	if type(keywords) == "string" then keywords = {keywords} end
+	for _, gui in ipairs(plr.PlayerGui:GetChildren()) do
+		for _, b in ipairs(gui:GetDescendants()) do
+			if b:IsA("TextButton") or b:IsA("ImageButton") then
+				local name = b.Name:lower()
+				local txt = (b.Text or ""):lower()
+				for _, kw in ipairs(keywords) do
+					local k = kw:lower()
+					if (name:find(k) or txt:find(k)) and b.Visible then
+						return b
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+-- الضغط على زر بأمان
+local function pressButton(btn)
+	if not btn or not btn.Parent then return false end
+	local ok = pcall(function() btn:Activate() end)
+	return ok
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- 7) Auto Roll
+-- ═══════════════════════════════════════════════════════════
+local rollBtn, lastRoll = nil, 0
+
+task.spawn(function()
+	while true do
+		task.wait(0.15)
+		if S.autoRoll then
+			-- بحث عن زر Roll
+			if not rollBtn or not rollBtn.Parent then
+				rollBtn = findButton({"roll", "spin", "لف", "اسحب"})
+			end
+			if rollBtn then
+				local now = tick()
+				if now - lastRoll >= cfg.autoRollDelay then
+					lastRoll = now
+					pressButton(rollBtn)
+					statusLabel.Text = "🎲 Roll #" .. math.floor(now * 10) % 10000
+					statusLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
+				end
+			-- محاولة Remote
+			elseif Remotes.roll then
+				local now = tick()
+				if now - lastRoll >= cfg.autoRollDelay then
+					lastRoll = now
+					pcall(function() Remotes.roll:FireServer() end)
+					statusLabel.Text = "🎲 Roll (Remote)"
+					statusLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
+				end
+			else
+				statusLabel.Text = "⚠️ ما لقيت زر Roll"
+				statusLabel.TextColor3 = Color3.fromRGB(255, 150, 150)
+			end
+		end
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- 8) Auto Collect — يعتمد على Remote المُكتشف CollectFruitPickup
+-- ═══════════════════════════════════════════════════════════
+local collectBtn, lastCollect = nil, 0
+
+task.spawn(function()
+	while true do
+		task.wait(0.3)
+		if S.autoCollect then
+			-- زر في الواجهة
+			if not collectBtn or not collectBtn.Parent then
+				collectBtn = findButton({"collect", "claim", "grab", "money", "cash", "جمع", "استلام"})
+			end
+
+			local now = tick()
+			if collectBtn and (now - lastCollect >= cfg.autoCollectDelay) then
+				lastCollect = now
+				pressButton(collectBtn)
+				statusLabel.Text = "💰 جمع المال..."
+				statusLabel.TextColor3 = Color3.fromRGB(100, 255, 150)
+			end
+		end
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- 9) Auto Steal — يطير للنباتات ويسرقها
+-- ═══════════════════════════════════════════════════════════
+local function getNearestFruit()
+	local root = rt()
+	if not root then return nil end
+	local best, bestD = nil, cfg.stealRange
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("BasePart") or (obj:IsA("Model") and obj.PrimaryPart) then
+			local n = obj.Name:lower()
+			if n:find("fruit") or n:find("plant") or n:find("crop")
+			or n:find("tree") or n:find("harvest") or n:find("نبت") then
+				local pos = obj:IsA("BasePart") and obj.Position
+					or (obj.PrimaryPart and obj.PrimaryPart.Position)
+				if pos then
+					local d = dist(pos, root.Position)
+					if d < bestD then best, bestD = obj, d end
+				end
+			end
+		end
+	end
+	return best
+end
+
+local function tpTo(target)
+	local root = rt()
+	if not root or not target then return end
+	local pos = target:IsA("BasePart") and target.Position
+		or (target.PrimaryPart and target.PrimaryPart.Position)
+	if not pos then return end
+
+	if cfg.tpSmooth then
+		-- تحريك سلس لتقليل كشف الأنظمة
+		local goal = CFrame.new(pos + Vector3.new(0, 3, 0))
+		root.CFrame = root.CFrame:Lerp(goal, 0.5)
+	else
+		root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+	end
+end
+
+task.spawn(function()
+	while true do
+		task.wait(cfg.autoStealDelay)
+		if S.autoSteal then
+			local target = getNearestFruit()
+			if target then
+				tpTo(target)
+				statusLabel.Text = "🌱 سرقة: " .. target.Name
+				statusLabel.TextColor3 = Color3.fromRGB(255, 100, 200)
+
+				-- لمس الجزء لجعله يطلق TouchTransmitter
+				local h = hu()
+				if target:IsA("BasePart") then safeTouch(target, h) end
+
+				-- تشغيل ProximityPrompt إن وجد
+				for _, p in ipairs(target:GetDescendants()) do
+					if p:IsA("ProximityPrompt") then firePrompt(p) end
+				end
+
+				-- محاولة إرسال Remote السرقة
+				if Remotes.steal then
+					pcall(function() Remotes.steal:FireServer(target) end)
+				end
+				if Remotes.collectFruit then
+					pcall(function() Remotes.collectFruit:FireServer(target) end)
+				end
+			else
+				statusLabel.Text = "🔍 ما فيه نباتات قريبة"
+				statusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+			end
+		end
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- 10) ESP
+-- ═══════════════════════════════════════════════════════════
+local function createESP(obj, color)
+	if not obj or not obj.Parent or espBoxes[obj] then return end
+	local adornee = obj:IsA("BasePart") and obj or obj.PrimaryPart
+	if not adornee then
+		local ok, pivot = pcall(function() return obj:GetPivot() end)
+		if not ok then return end
+		-- إنشاء Part مؤقت
+		local tmp = Instance.new("Part")
+		tmp.Anchored = true
+		tmp.CanCollide = false
+		tmp.Transparency = 1
+		tmp.Size = Vector3.new(2, 2, 2)
+		tmp.CFrame = pivot
+		tmp.Parent = g
+		adornee = tmp
+	end
+	local size = adornee.Size or Vector3.new(3, 3, 3)
+	local box = Instance.new("BoxHandleAdornment")
+	box.Size = size + Vector3.new(0.5, 0.5, 0.5)
+	box.Adornee = adornee
+	box.AlwaysOnTop = true
+	box.ZIndex = 5
+	box.Transparency = 0.6
+	box.Color3 = color
+	box.Parent = g
+	espBoxes[obj] = box
+end
+
+local function clearESP()
+	for _, box in pairs(espBoxes) do
+		if box and box.Parent then box:Destroy() end
+	end
+	espBoxes = {}
+end
+
+task.spawn(function()
+	while true do
+		task.wait(0.8)
+		local anyESP = S.espPlants or S.espPlayers or S.espPets
+		if anyESP then
+			if S.espPlants then
+				for _, obj in ipairs(workspace:GetDescendants()) do
+					if obj:IsA("BasePart") or (obj:IsA("Model") and obj.PrimaryPart) then
+						local n = obj.Name:lower()
+						if n:find("fruit") or n:find("plant") or n:find("crop") or n:find("نبت") then
+							createESP(obj, Color3.fromRGB(0, 255, 100))
+						end
+					end
+				end
+			end
+			if S.espPlayers then
+				for _, p in ipairs(Players:GetPlayers()) do
+					if p ~= plr and p.Character then
+						local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+						if hrp then createESP(hrp, Color3.fromRGB(255, 100, 100)) end
+					end
+				end
+			end
+			if S.espPets then
+				for _, obj in ipairs(workspace:GetDescendants()) do
+					if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
+						local n = obj.Name:lower()
+						if n:find("pet") or n:find("حيوان") then
+							createESP(obj, Color3.fromRGB(100, 200, 255))
+						end
+					end
+				end
+			end
+		else
+			if next(espBoxes) then clearESP() end
+		end
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- 11) أزرار الواجهة
+-- ═══════════════════════════════════════════════════════════
+mkBtn(60, "🧱 عبور الجدران", Color3.fromRGB(0, 140, 255), function(on)
+	S.noclip = on
+	if on then applyNoclip(ch()) else restoreCollide() end
+end)
+
+mkBtn(96, "🪽 الطيران", Color3.fromRGB(0, 220, 100), function(on)
+	S.fly = on
+	flyBtns.Visible = on and main.Visible
+	if not on then
+		flyUp, flyDown = false, false
+		local h = hu()
+		if h then h.PlatformStand = false end
+		local r = rt()
+		if r then
+			r.AssemblyLinearVelocity = Vector3.zero
+			r.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+end)
+
+mkBtn(132, "🎲 Roll تلقائي", Color3.fromRGB(255, 200, 50), function(on)
+	S.autoRoll = on
+	rollBtn = nil
+	if on then
+		statusLabel.Text = "🎲 Roll مفعّل"
+		statusLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
+	end
+end)
+
+mkBtn(168, "💰 جمع المال", Color3.fromRGB(50, 220, 100), function(on)
+	S.autoCollect = on
+	collectBtn = nil
+	if on then
+		statusLabel.Text = "💰 الجمع مفعّل"
+		statusLabel.TextColor3 = Color3.fromRGB(100, 255, 150)
+	end
+end)
+
+mkBtn(204, "🌱 سرقة تلقائية", Color3.fromRGB(255, 80, 200), function(on)
+	S.autoSteal = on
+	if on then
+		statusLabel.Text = "🌱 السرقة مفعّلة"
+		statusLabel.TextColor3 = Color3.fromRGB(255, 100, 200)
+	else
+		statusLabel.Text = "⚪ جاهز"
+		statusLabel.TextColor3 = Color3.fromRGB(180, 220, 255)
+	end
+end)
+
+mkBtn(240, "🌿 ESP النباتات", Color3.fromRGB(0, 255, 100), function(on)
+	S.espPlants = on
+	if not on and not S.espPlayers and not S.espPets then clearESP() end
+end)
+
+mkBtn(276, "👥 ESP اللاعبين", Color3.fromRGB(255, 100, 100), function(on)
+	S.espPlayers = on
+	if not on and not S.espPlants and not S.espPets then clearESP() end
+end)
+
+mkBtn(312, "🐾 ESP الحيوانات", Color3.fromRGB(100, 200, 255), function(on)
+	S.espPets = on
+	if not on and not S.espPlants and not S.espPlayers then clearESP() end
+end)
+
+mkBtn(348, "🔄 إعادة فحص Remotes", Color3.fromRGB(150, 150, 255), function(on)
+	scanRemotes()
+	local names = {}
+	for name, _ in pairs(Remotes.list) do table.insert(names, name) end
+	statusLabel.Text = "🔍 Remotes: " .. (#names > 0 and #names .. " حدث" or "ما فيه")
+	statusLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+	print("═══ Remotes المكتشفة ═══")
+	for _, name in ipairs(names) do print("  •", name) end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- 12) سلايدر السرعة
+-- ═══════════════════════════════════════════════════════════
+local spdLabel = Instance.new("TextLabel", main)
+spdLabel.Size = UDim2.new(1, -30, 0, 18)
+spdLabel.Position = UDim2.fromOffset(15, 388)
+spdLabel.BackgroundTransparency = 1
+spdLabel.Text = "⚡ السرعة: " .. FLY_SPEED
+spdLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
+spdLabel.Font = Enum.Font.GothamBold
+spdLabel.TextSize = 12
+spdLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local slider = Instance.new("Frame", main)
+slider.Size = UDim2.new(1, -30, 0, 6)
+slider.Position = UDim2.fromOffset(15, 410)
+slider.BackgroundColor3 = Color3.fromRGB(30, 40, 60)
+slider.BorderSizePixel = 0
+Instance.new("UICorner", slider).CornerRadius = UDim.new(1, 0)
+
+local fill = Instance.new("Frame", slider)
+fill.Size = UDim2.fromScale((FLY_SPEED - 10) / 190, 1)
+fill.BackgroundColor3 = Color3.fromRGB(255, 220, 100)
+fill.BorderSizePixel = 0
+Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+local knob = Instance.new("Frame", slider)
+knob.Size = UDim2.fromOffset(14, 14)
+knob.Position = UDim2.new(fill.Size.X.Scale, -7, 0.5, -7)
+knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+knob.BorderSizePixel = 0
+Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+local sliderBtn = Instance.new("TextButton", slider)
+sliderBtn.Size = UDim2.new(1, 20, 3, 0)
+sliderBtn.Position = UDim2.fromOffset(-10, -10)
+sliderBtn.BackgroundTransparency = 1
+sliderBtn.Text = ""
+
+local dragSlider = false
+
+local function setSpeedFromX(x)
+	local absX = slider.AbsolutePosition.X
+	local w = slider.AbsoluteSize.X
+	local t = math.clamp((x - absX) / w, 0, 1)
+	local val = math.floor(10 + t * 190)
+	FLY_SPEED = val
+	cfg.speed = val
+	fill.Size = UDim2.fromScale(t, 1)
+	knob.Position = UDim2.new(t, -7, 0.5, -7)
+	spdLabel.Text = "⚡ السرعة: " .. val
+end
+
+sliderBtn.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1
+	or i.UserInputType == Enum.UserInputType.Touch then
+		dragSlider = true
+		setSpeedFromX(i.Position.X)
+	end
+end)
+UIS.InputChanged:Connect(function(i)
+	if not dragSlider then return end
+	if i.UserInputType == Enum.UserInputType.MouseMovement
+	or i.UserInputType == Enum.UserInputType.Touch then
+		setSpeedFromX(i.Position.X)
+	end
+end)
+UIS.InputEnded:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1
+	or i.UserInputType == Enum.UserInputType.Touch then
+		if dragSlider then dragSlider = false; saveCfg() end
+	end
+end)
+
+-- تلميح
+local hint = Instance.new("TextLabel", main)
+hint.Size = UDim2.new(1, -20, 0, 25)
+hint.Position = UDim2.fromOffset(10, 425)
+hint.BackgroundTransparency = 1
+hint.Text = "Shift الأيمن = إخفاء | Space/Ctrl = صعود ونزول"
+hint.TextColor3 = Color3.fromRGB(0, 200, 255)
+hint.Font = Enum.Font.Gotham
+hint.TextSize = 10
+hint.TextWrapped = true
+
+-- ═══════════════════════════════════════════════════════════
+-- 13) Noclip Loop
+-- ═══════════════════════════════════════════════════════════
+RS.Stepped:Connect(function()
+	if not S.noclip then return end
+	local c = ch()
+	if not c then return end
+	for _, p in ipairs(c:GetDescendants()) do
+		if p:IsA("BasePart") and p.CanCollide then
+			if savedCollide[p] == nil then savedCollide[p] = p.CanCollide end
+			p.CanCollide = false
+		end
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- 14) Fly Loop
+-- ═══════════════════════════════════════════════════════════
+local function clearFly()
+	if bv then bv:Destroy() bv = nil end
+	if bg then bg:Destroy() bg = nil end
+end
+
+RS.RenderStepped:Connect(function()
+	local h, r = hu(), rt()
+	if not S.fly then
+		if bv or bg then clearFly() end
+		if h and h.PlatformStand then h.PlatformStand = false end
+		return
+	end
+	if not (r and h) then return end
+	if not bv or bv.Parent ~= r then
+		clearFly()
+		bv = Instance.new("BodyVelocity", r)
+		bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+		bg = Instance.new("BodyGyro", r)
+		bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+		bg.P = 9e4
+	end
+	h.PlatformStand = true
+	local dir = h.MoveDirection * FLY_SPEED
+	if flyUp then dir = dir + Vector3.new(0, FLY_SPEED, 0) end
+	if flyDown then dir = dir - Vector3.new(0, FLY_SPEED, 0) end
+	bv.Velocity = dir
+	bg.CFrame = workspace.CurrentCamera.CFrame
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- 15) كيبورد
+-- ═══════════════════════════════════════════════════════════
+UIS.InputBegan:Connect(function(i, gp)
+	if gp then return end
+	if not S.fly then return end
+	if i.KeyCode == Enum.KeyCode.Space then flyUp = true end
+	if i.KeyCode == Enum.KeyCode.LeftControl or i.KeyCode == Enum.KeyCode.RightControl then flyDown = true end
+end)
+UIS.InputEnded:Connect(function(i)
+	if i.KeyCode == Enum.KeyCode.Space then flyUp = false end
+	if i.KeyCode == Enum.KeyCode.LeftControl or i.KeyCode == Enum.KeyCode.RightControl then flyDown = false end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- 16) عند الريسبون
+-- ═══════════════════════════════════════════════════════════
+plr.CharacterAdded:Connect(function(c)
+	S.fly = false
+	flyUp, flyDown = false, false
+	clearFly()
+	flyBtns.Visible = false
+	watchChar(c)
+	if S.noclip then
+		task.wait(0.1)
+		applyNoclip(c)
+	end
+end)
+
+if ch() then watchChar(ch()) end
+
+-- ═══════════════════════════════════════════════════════════
+-- 17) إخفاء/إظهار
+-- ═══════════════════════════════════════════════════════════
+UIS.InputBegan:Connect(function(i, gp)
+	if gp then return end
+	if i.KeyCode == hideKey then
+		main.Visible = not main.Visible
+		flyBtns.Visible = main.Visible and S.fly
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- 18) سحب الواجهة
+-- ═══════════════════════════════════════════════════════════
+local dragging, dragStart, startPos
+title.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1
+	or i.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = i.Position
+		startPos = main.Position
+	end
+end)
+UIS.InputChanged:Connect(function(i)
+	if not dragging then return end
+	if i.UserInputType == Enum.UserInputType.MouseMovement
+	or i.UserInputType == Enum.UserInputType.Touch then
+		local d = i.Position - dragStart
+		main.Position = UDim2.new(
+			startPos.X.Scale, startPos.X.Offset + d.X,
+			startPos.Y.Scale, startPos.Y.Offset + d.Y
+		)
+	end
+end)
+UIS.InputEnded:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1
+	or i.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+print("═══════════════════════════════════════════")
+print("🌱 سكربت خليل للنباتات v2.0 شغال")
+print("🎮 Remotes مكتشفة: " .. tostring(#Remotes.list))
+for name, _ in pairs(Remotes.list) do print("  •", name) end
+print("═══════════════════════════════════════════")
