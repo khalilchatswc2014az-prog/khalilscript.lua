@@ -1,0 +1,1023 @@
+-- ================================================================================
+-- سكربت خليل | Khalil Script — نسخة وادي حس (Huss Valley) — v3 Clean
+-- ✅ بدون UIGradient — كل المزايا في الرئيسية — جاهز للتشغيل
+-- ================================================================================
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
+local Teams = game:GetService("Teams")
+
+-- ═══════════════════════════════════════════════════════════════
+local UI_IMAGE = "rbxassetid://0" -- ←←← ضع ID الصورة هنا
+
+local function resolveImage(img)
+    if not img or img == "" then return "" end
+    if img:sub(1, 10) == "rbxassetid" or img:sub(1, 9) == "rbxasset:" then
+        return img
+    end
+    if getcustomasset and isfile then
+        local ok, exists = pcall(isfile, img)
+        if ok and exists then
+            local ok2, asset = pcall(getcustomasset, img)
+            if ok2 and asset then return asset end
+        end
+    end
+    return img
+end
+UI_IMAGE = resolveImage(UI_IMAGE)
+
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do task.wait(0.1) LocalPlayer = Players.LocalPlayer end
+
+if _G.KhalilCleanup then pcall(function() _G.KhalilCleanup() end) end
+
+local Connections = {}
+local function bind(signal, callback)
+    local conn = signal:Connect(callback)
+    table.insert(Connections, conn)
+    return conn
+end
+
+pcall(function()
+    local oldGui = game.CoreGui:FindFirstChild("KhalilScript")
+    if oldGui then oldGui:Destroy() end
+end)
+
+local State = {
+    fly = false, infJump = false, speed = false,
+    god = false, hitbox = false, alwaysHero = false
+}
+
+local Values = {
+    hitboxSize = 5,
+    uiScale = 1.0, uiTransparency = 0,
+    floatSize = 80, floatImage = "", floatColor = "143C6C", floatTransparency = 0,
+    bgImageTransparency = 0.20,
+    bgFogTransparency = 0.50,
+    runSpeed = 40
+}
+
+local IsMinimized = false
+local IsAlive = true
+local SAVE_FILE = "KhalilSettings.json"
+local CanSave = (writefile and readfile and isfile and delfile) and true or false
+local UISetters = {}
+
+local OriginalWalkSpeed = nil
+local OriginalHRPTransparency = {}
+local OriginalHRPSize = {}
+
+local function getSafeParent()
+    if gethui then
+        local ok, res = pcall(gethui)
+        if ok and res then return res end
+    end
+    local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+    if ok and cg then return cg end
+    return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local Colors = {
+    Navy = Color3.fromRGB(7, 12, 30),
+    Panel = Color3.fromRGB(10, 18, 40),
+    Blue = Color3.fromRGB(0, 140, 255),
+    Green = Color3.fromRGB(0, 220, 100),
+    Purple = Color3.fromRGB(150, 60, 255),
+    Red = Color3.fromRGB(255, 40, 70),
+    Cyan = Color3.fromRGB(0, 200, 255),
+    Orange = Color3.fromRGB(255, 170, 0),
+    White = Color3.new(1, 1, 1),
+}
+
+local function addCorner(p, r)
+    local c = Instance.new("UICorner", p)
+    c.CornerRadius = r or UDim.new(0, 10)
+    return c
+end
+local function addStroke(p, col, t)
+    local s = Instance.new("UIStroke", p)
+    s.Color = col
+    s.Thickness = t or 2
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    return s
+end
+local function createFrame(p, pos, size, bg)
+    local f = Instance.new("Frame", p)
+    f.Position = pos f.Size = size
+    if bg then f.BackgroundColor3 = bg else f.BackgroundTransparency = 1 end
+    f.BorderSizePixel = 0
+    return f
+end
+local function createLabel(p, text, sz, pos, size, col)
+    local l = Instance.new("TextLabel", p)
+    l.BackgroundTransparency = 1
+    l.Text = text l.Font = Enum.Font.GothamBold
+    l.TextSize = sz l.TextColor3 = col or Colors.White
+    l.Position = pos l.Size = size l.BorderSizePixel = 0
+    return l
+end
+local function createButton(p, text, sz, pos, size, bg, col)
+    local b = Instance.new("TextButton", p)
+    b.Text = text b.Font = Enum.Font.GothamBold
+    b.TextSize = sz b.TextColor3 = col or Colors.White
+    b.BackgroundColor3 = bg or Colors.Panel
+    b.AutoButtonColor = true b.BorderSizePixel = 0
+    b.Position = pos b.Size = size
+    return b
+end
+local function createTextBox(p, text, sz, pos, size, bg, borderCol)
+    local tb = Instance.new("TextBox", p)
+    tb.Position = pos tb.Size = size
+    tb.BackgroundColor3 = bg or Color3.fromRGB(6, 12, 30)
+    tb.BorderSizePixel = 0 tb.Font = Enum.Font.GothamBold
+    tb.TextSize = sz or 16 tb.TextColor3 = Colors.White
+    tb.Text = text or "" tb.ClearTextOnFocus = false
+    addCorner(tb, UDim.new(0, 8))
+    if borderCol then addStroke(tb, borderCol, 1.5) end
+    return tb
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "KhalilScript"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.Parent = getSafeParent()
+
+local MainFrame = createFrame(ScreenGui, UDim2.new(0.5, 0, 0.5, 0), UDim2.fromOffset(500, 440), Colors.Navy)
+MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+MainFrame.Active = false
+addCorner(MainFrame, UDim.new(0, 18))
+addStroke(MainFrame, Colors.Blue, 3)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🖼️  خلفية الصورة + الضباب (بدون UIGradient)
+-- ═══════════════════════════════════════════════════════════════
+local BgImage = Instance.new("ImageLabel", MainFrame)
+BgImage.Size = UDim2.fromScale(1, 1)
+BgImage.Position = UDim2.fromScale(0, 0)
+BgImage.BackgroundTransparency = 1
+BgImage.BorderSizePixel = 0
+BgImage.Image = UI_IMAGE
+BgImage.ScaleType = Enum.ScaleType.Crop
+BgImage.ImageTransparency = Values.bgImageTransparency
+BgImage.ZIndex = 0
+addCorner(BgImage, UDim.new(0, 18))
+
+local BgFog = Instance.new("Frame", MainFrame)
+BgFog.Size = UDim2.fromScale(1, 1)
+BgFog.BackgroundColor3 = Colors.Navy
+BgFog.BackgroundTransparency = Values.bgFogTransparency
+BgFog.BorderSizePixel = 0
+BgFog.ZIndex = 0
+addCorner(BgFog, UDim.new(0, 18))
+-- ═══════════════════════════════════════════════════════════════
+
+local UIScaleInstance = Instance.new("UIScale", MainFrame)
+
+local DragBar = createFrame(MainFrame, UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 80))
+DragBar.Active = true
+DragBar.ZIndex = 2
+
+do
+    local dragging = false
+    local dragStart, startPos
+    DragBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = MainFrame.Position
+        end
+    end)
+    bind(UserInputService.InputChanged, function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            local delta = input.Position - dragStart
+            MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    bind(UserInputService.InputEnded, function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+end
+
+local Crown = createLabel(MainFrame, "👑", 46, UDim2.new(0.5, -30, 0, -38), UDim2.fromOffset(60, 50), Color3.fromRGB(80, 190, 255))
+Crown.ZIndex = 5
+local MainTitle = createLabel(MainFrame, "سكربت خليل", 36, UDim2.new(0, 130, 0, 14), UDim2.fromOffset(330, 50), Color3.fromRGB(190, 235, 255))
+MainTitle.ZIndex = 3
+MainTitle.TextStrokeTransparency = 0.4
+MainTitle.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+local SubTitle = createLabel(MainFrame, "وادي حس — اركض يا بطل!", 15, UDim2.new(0, 130, 0, 62), UDim2.fromOffset(330, 22), Colors.Cyan)
+SubTitle.ZIndex = 3
+SubTitle.TextStrokeTransparency = 0.5
+SubTitle.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+
+local CloseButton = createButton(MainFrame, "✕", 22, UDim2.new(1, -54, 0, 14), UDim2.fromOffset(40, 40), Color3.fromRGB(12, 22, 52))
+CloseButton.ZIndex = 4
+addCorner(CloseButton, UDim.new(0, 12))
+addStroke(CloseButton, Colors.Blue, 2)
+
+local MinimizeButton = createButton(MainFrame, "-", 22, UDim2.new(1, -100, 0, 14), UDim2.fromOffset(40, 40), Color3.fromRGB(12, 22, 52))
+MinimizeButton.ZIndex = 4
+addCorner(MinimizeButton, UDim.new(0, 12))
+addStroke(MinimizeButton, Colors.Blue, 2)
+
+local AvatarImage = ""
+pcall(function()
+    AvatarImage = Players:GetUserThumbnailAsync(LocalPlayer.UserId,
+        Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+end)
+Values.floatImage = UI_IMAGE ~= "" and UI_IMAGE or AvatarImage
+
+local AvatarFrame = createFrame(MainFrame, UDim2.fromOffset(16, 20), UDim2.fromOffset(92, 92), Color3.fromRGB(20, 30, 60))
+AvatarFrame.ZIndex = 3
+addCorner(AvatarFrame, UDim.new(1, 0))
+addStroke(AvatarFrame, Colors.Cyan, 3)
+local AvatarImageLabel = Instance.new("ImageLabel", AvatarFrame)
+AvatarImageLabel.Size = UDim2.fromScale(1, 1)
+AvatarImageLabel.BackgroundTransparency = 1
+AvatarImageLabel.Image = AvatarImage
+AvatarImageLabel.BorderSizePixel = 0
+addCorner(AvatarImageLabel, UDim.new(1, 0))
+
+local Signature = createLabel(MainFrame, "By 👑\nخليل!", 20, UDim2.fromOffset(12, 366), UDim2.fromOffset(100, 68), Colors.Cyan)
+Signature.Font = Enum.Font.SourceSansItalic
+Signature.TextWrapped = true
+Signature.ZIndex = 3
+
+local ContentPanel = createFrame(MainFrame, UDim2.fromOffset(122, 96), UDim2.new(1, -134, 1, -110), Colors.Panel)
+ContentPanel.ZIndex = 2
+addCorner(ContentPanel, UDim.new(0, 14))
+addStroke(ContentPanel, Colors.Blue, 2)
+
+local function makeScrollPage()
+    local sp = Instance.new("ScrollingFrame", ContentPanel)
+    sp.BackgroundTransparency = 1 sp.BorderSizePixel = 0
+    sp.Size = UDim2.fromScale(1, 1)
+    sp.ScrollBarThickness = 4 sp.Active = true
+    sp.CanvasSize = UDim2.new(0, 0, 0, 0)
+    sp.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    sp.Visible = false
+    local lay = Instance.new("UIListLayout", sp)
+    lay.Padding = UDim.new(0, 6)
+    lay.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    lay.SortOrder = Enum.SortOrder.LayoutOrder
+    local pad = Instance.new("UIPadding", sp)
+    pad.PaddingTop = UDim.new(0, 8)
+    pad.PaddingBottom = UDim.new(0, 8)
+    return sp
+end
+
+local HomePage = makeScrollPage()
+local SettingsPage = makeScrollPage()
+local InfoPage = makeScrollPage()
+
+local orderCounter = 0
+local function nextOrder() orderCounter = orderCounter + 1 return orderCounter end
+
+local function makeRow(page, h, color, icon, name)
+    local hh = math.min(h, 48)
+    local row = createFrame(page, UDim2.fromOffset(0, 0), UDim2.new(1, -20, 0, h), Color3.fromRGB(11, 16, 36))
+    row.LayoutOrder = nextOrder()
+    addCorner(row, UDim.new(0, 12))
+    addStroke(row, color, 2)
+    createLabel(row, icon, 26, UDim2.fromOffset(10, 0), UDim2.fromOffset(50, hh))
+    local nl = createLabel(row, name, 17, UDim2.new(0, 64, 0, 0), UDim2.new(1, -140, 0, hh))
+    nl.TextWrapped = true
+    return row, nl
+end
+
+local function makeSwitch(row, color, callback, initial)
+    local hh = math.min(row.Size.Y.Offset, 48)
+    local offColor = Color3.fromRGB(60, 60, 75)
+    local sw = createButton(row, "", 14, UDim2.new(1, -70, 0, (hh - 30) / 2), UDim2.fromOffset(58, 30), offColor)
+    sw.AutoButtonColor = false
+    addCorner(sw, UDim.new(1, 0))
+    local knob = createFrame(sw, UDim2.new(0, 3, 0.5, -12), UDim2.fromOffset(24, 24), Colors.White)
+    addCorner(knob, UDim.new(1, 0))
+    local isOn = false
+    if initial then
+        isOn = true
+        sw.BackgroundColor3 = color
+        knob.Position = UDim2.new(1, -27, 0.5, -12)
+    end
+    local function apply(v)
+        isOn = v
+        sw.BackgroundColor3 = isOn and color or offColor
+        knob:TweenPosition(isOn and UDim2.new(1, -27, 0.5, -12) or UDim2.new(0, 3, 0.5, -12), "Out", "Quad", 0.15, true)
+        if callback then callback(isOn) end
+    end
+    sw.MouseButton1Click:Connect(function() apply(not isOn) end)
+    return function(v) if v ~= isOn then apply(v) end end
+end
+
+-- ================================================================================
+-- الزر العائم
+-- ================================================================================
+local FloatingButton = Instance.new("ImageButton", ScreenGui)
+FloatingButton.Size = UDim2.fromOffset(Values.floatSize, Values.floatSize)
+FloatingButton.Position = UDim2.new(0, 30, 0.35, 0)
+FloatingButton.BackgroundColor3 = Color3.fromRGB(20, 30, 60)
+FloatingButton.Image = Values.floatImage
+FloatingButton.ImageTransparency = 0
+FloatingButton.AutoButtonColor = false
+FloatingButton.Visible = false
+FloatingButton.BorderSizePixel = 0
+addCorner(FloatingButton, UDim.new(1, 0))
+addStroke(FloatingButton, Colors.Blue, 5)
+local FloatCrown = createLabel(FloatingButton, "👑", 26, UDim2.new(1, -36, 0, -16), UDim2.fromOffset(34, 30), Color3.fromRGB(80, 190, 255))
+FloatCrown.ZIndex = 3
+
+local function parseHex(str)
+    str = tostring(str):gsub("#", "")
+    if #str ~= 6 then return nil end
+    local r = tonumber(str:sub(1, 2), 16)
+    local g = tonumber(str:sub(3, 4), 16)
+    local b = tonumber(str:sub(5, 6), 16)
+    if not (r and g and b) then return nil end
+    return Color3.fromRGB(r, g, b)
+end
+
+local function applyFloatSettings()
+    FloatingButton.Size = UDim2.fromOffset(Values.floatSize, Values.floatSize)
+    FloatingButton.Image = Values.floatImage ~= "" and Values.floatImage or AvatarImage
+    FloatingButton.BackgroundTransparency = Values.floatTransparency
+    FloatingButton.ImageTransparency = 0
+    local col = parseHex(Values.floatColor)
+    if col then FloatingButton.BackgroundColor3 = col end
+    FloatCrown.TextSize = math.floor(Values.floatSize * 0.32)
+    FloatCrown.Size = UDim2.fromOffset(math.floor(Values.floatSize * 0.42), math.floor(Values.floatSize * 0.38))
+    FloatCrown.Position = UDim2.new(1, -math.floor(Values.floatSize * 0.45), 0, -math.floor(Values.floatSize * 0.2))
+end
+applyFloatSettings()
+
+local fDrag, fStart, fOrigin, fMoved = false, nil, nil, false
+local function isPress(i)
+    return i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1
+end
+FloatingButton.InputBegan:Connect(function(i)
+    if isPress(i) then
+        fDrag = true fStart = i.Position
+        fOrigin = FloatingButton.Position fMoved = false
+    end
+end)
+bind(UserInputService.InputChanged, function(i)
+    if fDrag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+        local dx = i.Position.X - fStart.X
+        local dy = i.Position.Y - fStart.Y
+        if math.abs(dx) + math.abs(dy) > 10 then fMoved = true end
+        if fMoved then
+            FloatingButton.Position = UDim2.new(fOrigin.X.Scale, fOrigin.X.Offset + dx, fOrigin.Y.Scale, fOrigin.Y.Offset + dy)
+        end
+    end
+end)
+bind(UserInputService.InputEnded, function(i)
+    if fDrag and isPress(i) then
+        fDrag = false
+        if not fMoved then
+            FloatingButton.Visible = false
+            MainFrame.Visible = true
+        end
+    end
+end)
+
+-- ================================================================================
+-- 🏠 الرئيسية — كل المزايا
+-- ================================================================================
+
+-- ════════ 🏃 سرعة الحركة ════════
+local SpeedRow = makeRow(HomePage, 100, Colors.Green, "🏃", "سرعة الحركة")
+local SpeedToggle = makeSwitch(SpeedRow, Colors.Green, function(v)
+    State.speed = v
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            if v then
+                if not OriginalWalkSpeed then OriginalWalkSpeed = hum.WalkSpeed end
+                hum.WalkSpeed = Values.runSpeed
+            else
+                hum.WalkSpeed = OriginalWalkSpeed or 16
+                OriginalWalkSpeed = nil
+            end
+        end
+    end
+end)
+UISetters.speed = SpeedToggle
+
+local SpeedBar = createFrame(SpeedRow, UDim2.fromOffset(10, 58), UDim2.new(1, -80, 0, 8), Color3.fromRGB(30, 50, 100))
+addCorner(SpeedBar, UDim.new(1, 0))
+SpeedBar.Active = true
+local SpeedFill = createFrame(SpeedBar, UDim2.fromScale(0, 0), UDim2.fromScale(0, 1), Colors.Green)
+addCorner(SpeedFill, UDim.new(1, 0))
+local SpeedHandle = createFrame(SpeedBar, UDim2.new(0, -9, 0.5, -9), UDim2.fromOffset(18, 18), Colors.White)
+addCorner(SpeedHandle, UDim.new(1, 0))
+local SpeedValueLabel = createLabel(SpeedRow, "40", 16, UDim2.new(1, -66, 0, 50), UDim2.fromOffset(56, 24), Colors.Green)
+
+createLabel(SpeedRow, "16", 11, UDim2.fromOffset(10, 72), UDim2.fromOffset(24, 14), Color3.fromRGB(180, 200, 230)).TextXAlignment = Enum.TextXAlignment.Left
+createLabel(SpeedRow, "75", 11, UDim2.new(1, -34, 0, 72), UDim2.fromOffset(24, 14), Color3.fromRGB(180, 200, 230)).TextXAlignment = Enum.TextXAlignment.Right
+
+local function setRunSpeed(v)
+    v = math.clamp(math.floor(v + 0.5), 16, 75)
+    Values.runSpeed = v
+    local a = (v - 16) / (75 - 16)
+    SpeedFill.Size = UDim2.new(a, 0, 1, 0)
+    SpeedHandle.Position = UDim2.new(a, -9, 0.5, -9)
+    SpeedValueLabel.Text = tostring(v)
+end
+setRunSpeed(Values.runSpeed)
+
+local speedDrag = false
+local function speedFromX(x)
+    local r = math.clamp((x - SpeedBar.AbsolutePosition.X) / SpeedBar.AbsoluteSize.X, 0, 1)
+    setRunSpeed(16 + r * (75 - 16))
+end
+SpeedBar.InputBegan:Connect(function(i)
+    if isPress(i) then speedDrag = true speedFromX(i.Position.X) end
+end)
+bind(UserInputService.InputChanged, function(i)
+    if speedDrag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+        speedFromX(i.Position.X)
+    end
+end)
+bind(UserInputService.InputEnded, function(i)
+    if isPress(i) then speedDrag = false end
+end)
+
+-- ════════ 🦸 ابقَ دائماً البطل ════════
+local HeroRow = makeRow(HomePage, 48, Colors.Cyan, "🦸", "ابقَ دائماً البطل")
+local HeroSetter = makeSwitch(HeroRow, Colors.Cyan, function(v) State.alwaysHero = v end)
+UISetters.alwaysHero = HeroSetter
+
+-- ════════ 🚀 انتقال للجهة الأخرى ════════
+local TpRow = makeRow(HomePage, 48, Colors.Orange, "🚀", "انتقال للجهة الأخرى")
+local TpBtn = createButton(TpRow, "🚀", 22, UDim2.new(1, -70, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(120, 60, 10))
+addCorner(TpBtn, UDim.new(0, 8))
+
+local function findFinishPosition()
+    local nameCandidates = {"Finish", "FinishLine", "End", "EndPart", "Goal", "Exit", "Final", "FinalLine", "EndZone"}
+    for _, name in ipairs(nameCandidates) do
+        local part = workspace:FindFirstChild(name, true)
+        if part and part:IsA("BasePart") then return part.Position end
+    end
+    local furthest, furthestDist = nil, -1
+    local myHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if myHrp then
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Character then
+                local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local d = (hrp.Position - myHrp.Position).Magnitude
+                    if d > furthestDist then
+                        furthestDist = d
+                        furthest = hrp.Position
+                    end
+                end
+            end
+        end
+    end
+    return furthest
+end
+
+local function doTeleport()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local target = findFinishPosition()
+    local newCF
+    if target then
+        newCF = CFrame.new(target + Vector3.new(0, 5, -10))
+    else
+        local dir = hrp.CFrame.LookVector
+        newCF = hrp.CFrame + dir * 250 + Vector3.new(0, 30, 0)
+    end
+    hrp.CFrame = newCF
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+end
+
+TpBtn.MouseButton1Click:Connect(doTeleport)
+
+-- ════════ 🚁 طيران ════════
+local FlyRow = makeRow(HomePage, 48, Colors.Blue, "🚁", "طيران")
+local FlySetter = makeSwitch(FlyRow, Colors.Blue, function(v) State.fly = v end)
+UISetters.fly = FlySetter
+
+-- ════════ 🦘 قفز لا نهائي ════════
+local JumpRow = makeRow(HomePage, 48, Colors.Purple, "🦘", "قفز لا نهائي")
+local JumpSetter = makeSwitch(JumpRow, Colors.Purple, function(v) State.infJump = v end)
+UISetters.infJump = JumpSetter
+
+-- ════════ 🛡️ وضع الخالد ════════
+local GodRow = makeRow(HomePage, 48, Colors.Green, "🛡️", "وضع الخالد (God)")
+local GodSetter = makeSwitch(GodRow, Colors.Green, function(v) State.god = v end)
+UISetters.god = GodSetter
+
+-- ════════ 🎯 هيت بوكس ════════
+local HitRow = makeRow(HomePage, 92, Colors.Red, "🎯", "هيت بوكس موسّع")
+local HitSetter = makeSwitch(HitRow, Colors.Red, function(v) State.hitbox = v end)
+UISetters.hitbox = HitSetter
+
+local HitBar = createFrame(HitRow, UDim2.fromOffset(10, 54), UDim2.new(1, -80, 0, 8), Color3.fromRGB(30, 50, 100))
+addCorner(HitBar, UDim.new(1, 0))
+HitBar.Active = true
+local HitFill = createFrame(HitBar, UDim2.fromScale(0, 0), UDim2.fromScale(0, 1), Colors.Red)
+addCorner(HitFill, UDim.new(1, 0))
+local HitHandle = createFrame(HitBar, UDim2.new(0, -9, 0.5, -9), UDim2.fromOffset(18, 18), Colors.White)
+addCorner(HitHandle, UDim.new(1, 0))
+local HitValue = createLabel(HitRow, "5", 16, UDim2.new(1, -66, 0, 46), UDim2.fromOffset(56, 24), Colors.Red)
+createLabel(HitRow, "3", 11, UDim2.fromOffset(10, 68), UDim2.fromOffset(24, 14), Color3.fromRGB(180, 200, 230)).TextXAlignment = Enum.TextXAlignment.Left
+createLabel(HitRow, "15", 11, UDim2.new(1, -34, 0, 68), UDim2.fromOffset(24, 14), Color3.fromRGB(180, 200, 230)).TextXAlignment = Enum.TextXAlignment.Right
+
+local function setHitboxSize(v)
+    v = math.clamp(math.floor(v + 0.5), 3, 15)
+    Values.hitboxSize = v
+    local a = (v - 3) / 12
+    HitFill.Size = UDim2.new(a, 0, 1, 0)
+    HitHandle.Position = UDim2.new(a, -9, 0.5, -9)
+    HitValue.Text = tostring(v)
+end
+setHitboxSize(Values.hitboxSize)
+
+local hitDrag = false
+local function hitFromX(x)
+    local r = math.clamp((x - HitBar.AbsolutePosition.X) / HitBar.AbsoluteSize.X, 0, 1)
+    setHitboxSize(3 + r * 12)
+end
+HitBar.InputBegan:Connect(function(i)
+    if isPress(i) then hitDrag = true hitFromX(i.Position.X) end
+end)
+bind(UserInputService.InputChanged, function(i)
+    if hitDrag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+        hitFromX(i.Position.X)
+    end
+end)
+bind(UserInputService.InputEnded, function(i)
+    if isPress(i) then hitDrag = false end
+end)
+
+-- ================================================================================
+-- ⚙️ المحرك الفعلي
+-- ================================================================================
+local flyBV, flyBG = nil, nil
+
+local function getHRP()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+bind(RunService.Heartbeat, function()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+
+    if State.speed and hum.WalkSpeed ~= Values.runSpeed then
+        hum.WalkSpeed = Values.runSpeed
+    end
+
+    if State.god and hum.Health < hum.MaxHealth then
+        hum.Health = hum.MaxHealth
+    end
+
+    if State.alwaysHero then
+        local attrs = {"Killer", "IsKiller", "Infected", "Zombie", "IsZombie", "IsTagged", "IsIt", "Role", "PlayerRole"}
+        for _, attr in ipairs(attrs) do
+            local ok, val = pcall(function() return LocalPlayer:GetAttribute(attr) end)
+            if ok and val ~= nil then
+                if val == true then
+                    pcall(function() LocalPlayer:SetAttribute(attr, false) end)
+                elseif type(val) == "string" then
+                    local lv = val:lower()
+                    if lv:find("kill") or lv:find("zomb") or lv:find("infect") or lv:find("tag") then
+                        pcall(function() LocalPlayer:SetAttribute(attr, "Hero") end)
+                    end
+                end
+            end
+        end
+
+        for _, attr in ipairs(attrs) do
+            local ok, val = pcall(function() return char:GetAttribute(attr) end)
+            if ok and val == true then
+                pcall(function() char:SetAttribute(attr, false) end)
+            end
+        end
+
+        local ls = LocalPlayer:FindFirstChild("leaderstats")
+        if ls then
+            for _, child in ipairs(ls:GetChildren()) do
+                local n = child.Name:lower()
+                if n:find("kill") or n:find("zomb") or n:find("infect") or n:find("tag") then
+                    if child:IsA("BoolValue") and child.Value then
+                        pcall(function() child.Value = false end)
+                    elseif child:IsA("StringValue") then
+                        local cv = child.Value:lower()
+                        if cv:find("kill") or cv:find("zomb") or cv:find("infect") or cv:find("tag") then
+                            pcall(function() child.Value = "Hero" end)
+                        end
+                    end
+                end
+            end
+        end
+
+        if LocalPlayer.Team then
+            local tn = LocalPlayer.Team.Name:lower()
+            if tn:find("kill") or tn:find("zomb") or tn:find("infect") or tn:find("tag") then
+                for _, team in ipairs(Teams:GetTeams()) do
+                    local htn = team.Name:lower()
+                    if htn:find("hero") or htn:find("human") or htn:find("survivor") or htn:find("runner") then
+                        pcall(function() LocalPlayer.Team = team end)
+                        break
+                    end
+                end
+            end
+        end
+    end
+end)
+
+bind(UserInputService.JumpRequest, function()
+    if State.infJump then
+        local char = LocalPlayer.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+        end
+    end
+end)
+
+local function stopFly()
+    if flyBV then flyBV:Destroy() flyBV = nil end
+    if flyBG then flyBG:Destroy() flyBG = nil end
+end
+
+bind(RunService.Heartbeat, function()
+    if not State.fly then
+        if flyBV or flyBG then stopFly() end
+        return
+    end
+    local hrp = getHRP()
+    if not hrp then return end
+    if not flyBV then
+        flyBV = Instance.new("BodyVelocity", hrp)
+        flyBV.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        flyBV.Velocity = Vector3.zero
+    end
+    if not flyBG then
+        flyBG = Instance.new("BodyGyro", hrp)
+        flyBG.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+        flyBG.P = 10000
+    end
+    local cam = workspace.CurrentCamera
+    local move = Vector3.zero
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += cam.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= cam.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= cam.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += cam.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0, 1, 0) end
+    flyBV.Velocity = move * 60
+    flyBG.CFrame = cam.CFrame
+end)
+
+bind(RunService.Heartbeat, function()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                if State.hitbox then
+                    if not OriginalHRPTransparency[p] then
+                        OriginalHRPTransparency[p] = hrp.Transparency
+                        OriginalHRPSize[p] = hrp.Size
+                    end
+                    local targetSize = Vector3.new(Values.hitboxSize, Values.hitboxSize, Values.hitboxSize)
+                    if hrp.Size ~= targetSize then
+                        hrp.Size = targetSize
+                        hrp.Transparency = 0.5
+                        hrp.CanCollide = false
+                    end
+                else
+                    if OriginalHRPTransparency[p] then
+                        hrp.Transparency = OriginalHRPTransparency[p]
+                        hrp.Size = OriginalHRPSize[p] or Vector3.new(2, 2, 1)
+                        hrp.CanCollide = false
+                        OriginalHRPTransparency[p] = nil
+                        OriginalHRPSize[p] = nil
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ================================================================================
+-- تبويب الإعدادات
+-- ================================================================================
+local ScaleRow = makeRow(SettingsPage, 100, Colors.Blue, "📐", "حجم القائمة")
+local ScaleLabel = createLabel(ScaleRow, "100%", 20, UDim2.new(0.5, -35, 0, 56), UDim2.fromOffset(70, 34))
+local function setScale(v)
+    Values.uiScale = math.clamp(math.floor(v * 10 + 0.5) / 10, 0.6, 1.4)
+    UIScaleInstance.Scale = Values.uiScale
+    ScaleLabel.Text = math.floor(Values.uiScale * 100 + 0.5) .. "%"
+end
+local ScaleMinusBtn = createButton(ScaleRow, "−", 24, UDim2.new(0.5, -100, 0, 56), UDim2.fromOffset(44, 34), Color3.fromRGB(12, 22, 52))
+addCorner(ScaleMinusBtn, UDim.new(0, 8))
+addStroke(ScaleMinusBtn, Colors.Blue, 2)
+ScaleMinusBtn.MouseButton1Click:Connect(function() setScale(Values.uiScale - 0.1) end)
+local ScalePlusBtn = createButton(ScaleRow, "+", 24, UDim2.new(0.5, 56, 0, 56), UDim2.fromOffset(44, 34), Color3.fromRGB(12, 22, 52))
+addCorner(ScalePlusBtn, UDim.new(0, 8))
+addStroke(ScalePlusBtn, Colors.Blue, 2)
+ScalePlusBtn.MouseButton1Click:Connect(function() setScale(Values.uiScale + 0.1) end)
+
+local TranspRow = makeRow(SettingsPage, 48, Colors.Cyan, "💧", "شفافية الواجهة")
+local TranspInput = createTextBox(TranspRow, tostring(math.floor(Values.uiTransparency * 100)), 16, UDim2.new(1, -70, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(6, 12, 30), Colors.Cyan)
+TranspInput.FocusLost:Connect(function()
+    local n = tonumber(TranspInput.Text)
+    if n then
+        Values.uiTransparency = math.clamp(n, 0, 90) / 100
+        MainFrame.BackgroundTransparency = Values.uiTransparency
+        BgFog.BackgroundTransparency = math.clamp(Values.bgFogTransparency + Values.uiTransparency * 0.3, 0, 1)
+    end
+    TranspInput.Text = tostring(math.floor(Values.uiTransparency * 100))
+end)
+
+local BgRow = makeRow(SettingsPage, 48, Colors.Purple, "🌫️", "ضباب الخلفية")
+local BgInput = createTextBox(BgRow, tostring(math.floor(Values.bgImageTransparency * 100)), 16, UDim2.new(1, -70, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(6, 12, 30), Colors.Purple)
+BgInput.FocusLost:Connect(function()
+    local n = tonumber(BgInput.Text)
+    if n then
+        Values.bgImageTransparency = math.clamp(n, 0, 90) / 100
+        BgImage.ImageTransparency = Values.bgImageTransparency
+    end
+    BgInput.Text = tostring(math.floor(Values.bgImageTransparency * 100))
+end)
+
+local FloatSizeRow = makeRow(SettingsPage, 92, Colors.Purple, "👑", "حجم الزر العائم")
+createFrame(FloatSizeRow, UDim2.fromOffset(0, 48), UDim2.new(1, 0, 0, 2), Colors.Purple)
+local FloatMinus = createButton(FloatSizeRow, "−", 24, UDim2.fromOffset(10, 54), UDim2.fromOffset(38, 32), Color3.fromRGB(12, 22, 52))
+addCorner(FloatMinus, UDim.new(0, 8))
+addStroke(FloatMinus, Colors.Purple, 2)
+local FloatPlus = createButton(FloatSizeRow, "+", 24, UDim2.fromOffset(236, 54), UDim2.fromOffset(38, 32), Color3.fromRGB(12, 22, 52))
+addCorner(FloatPlus, UDim.new(0, 8))
+addStroke(FloatPlus, Colors.Purple, 2)
+local FloatSizeInput = createTextBox(FloatSizeRow, tostring(Values.floatSize), 20, UDim2.fromOffset(282, 54), UDim2.fromOffset(52, 32), Color3.fromRGB(11, 16, 36), Colors.Purple)
+local FloatHit = createFrame(FloatSizeRow, UDim2.fromOffset(56, 54), UDim2.fromOffset(172, 24))
+FloatHit.Active = true
+local FloatBar = createFrame(FloatHit, UDim2.new(0, 0, 0.5, -3), UDim2.new(1, 0, 0, 6), Color3.fromRGB(30, 50, 100))
+addCorner(FloatBar, UDim.new(1, 0))
+local FloatFill = createFrame(FloatBar, UDim2.fromScale(0, 0), UDim2.fromScale(0, 1), Colors.Purple)
+addCorner(FloatFill, UDim.new(1, 0))
+local FloatHandle = createFrame(FloatBar, UDim2.new(0, -9, 0.5, -9), UDim2.fromOffset(18, 18), Colors.White)
+addCorner(FloatHandle, UDim.new(1, 0))
+createLabel(FloatSizeRow, "40", 12, UDim2.fromOffset(56, 72), UDim2.fromOffset(30, 14), Color3.fromRGB(200, 220, 255)).TextXAlignment = Enum.TextXAlignment.Left
+createLabel(FloatSizeRow, "200", 12, UDim2.fromOffset(198, 72), UDim2.fromOffset(30, 14), Color3.fromRGB(200, 220, 255)).TextXAlignment = Enum.TextXAlignment.Right
+
+local function setFloatSize(v, isManual)
+    if isManual then
+        Values.floatSize = math.clamp(math.floor(v + 0.5), 40, 500)
+    else
+        Values.floatSize = math.clamp(math.floor(v + 0.5), 40, 200)
+    end
+    local a = math.clamp((Values.floatSize - 40) / 160, 0, 1)
+    FloatFill.Size = UDim2.new(a, 0, 1, 0)
+    FloatHandle.Position = UDim2.new(a, -9, 0.5, -9)
+    FloatSizeInput.Text = tostring(Values.floatSize)
+    applyFloatSettings()
+end
+setFloatSize(Values.floatSize, false)
+
+FloatSizeInput.FocusLost:Connect(function()
+    local n = tonumber(FloatSizeInput.Text)
+    setFloatSize(n or Values.floatSize, true)
+end)
+FloatMinus.MouseButton1Click:Connect(function() setFloatSize(Values.floatSize - 5, false) end)
+FloatPlus.MouseButton1Click:Connect(function() setFloatSize(Values.floatSize + 5, false) end)
+local floatDragging = false
+local function floatFromX(x)
+    local ratio = math.clamp((x - FloatHit.AbsolutePosition.X) / FloatHit.AbsoluteSize.X, 0, 1)
+    setFloatSize(40 + ratio * 160, false)
+end
+FloatHit.InputBegan:Connect(function(i)
+    if isPress(i) then floatDragging = true floatFromX(i.Position.X) end
+end)
+bind(UserInputService.InputChanged, function(i)
+    if floatDragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+        floatFromX(i.Position.X)
+    end
+end)
+bind(UserInputService.InputEnded, function(i)
+    if isPress(i) then floatDragging = false end
+end)
+
+local SaveRow = makeRow(SettingsPage, 48, Colors.Green, "💾", "حفظ الإعدادات")
+local SaveStatusLabel = createLabel(SaveRow, "اضغط حفظ أو استرجاع", 12, UDim2.new(1, -130, 0, 0), UDim2.fromOffset(120, 48), Color3.fromRGB(200, 200, 200))
+SaveStatusLabel.TextXAlignment = Enum.TextXAlignment.Right
+local SaveBtn = createButton(SaveRow, "حفظ", 14, UDim2.fromOffset(10, 9), UDim2.fromOffset(60, 30), Color3.fromRGB(18, 100, 50))
+addCorner(SaveBtn, UDim.new(0, 8))
+local LoadBtn = createButton(SaveRow, "استرجاع", 14, UDim2.fromOffset(80, 9), UDim2.fromOffset(70, 30), Color3.fromRGB(18, 55, 130))
+addCorner(LoadBtn, UDim.new(0, 8))
+local ClearBtn = createButton(SaveRow, "مسح", 14, UDim2.fromOffset(160, 9), UDim2.fromOffset(50, 30), Color3.fromRGB(90, 20, 30))
+addCorner(ClearBtn, UDim.new(0, 8))
+
+local function resetSaveLabel()
+    if not IsAlive then return end
+    pcall(function()
+        SaveStatusLabel.Text = "اضغط حفظ أو استرجاع"
+        SaveStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    end)
+end
+
+SaveBtn.MouseButton1Click:Connect(function()
+    if not CanSave then SaveStatusLabel.Text = "غير مدعوم" return end
+    local data = {State = State, Values = Values}
+    local ok, enc = pcall(function() return HttpService:JSONEncode(data) end)
+    if ok then
+        pcall(function() writefile(SAVE_FILE, enc) end)
+        SaveStatusLabel.Text = "✅ تم الحفظ"
+        SaveStatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
+        task.delay(2, resetSaveLabel)
+    end
+end)
+LoadBtn.MouseButton1Click:Connect(function()
+    if not CanSave then SaveStatusLabel.Text = "غير مدعوم" return end
+    if not isfile(SAVE_FILE) then SaveStatusLabel.Text = "لا يوجد محفوظات" return end
+    local ok, content = pcall(function() return readfile(SAVE_FILE) end)
+    if not ok or not content then return end
+    local ok2, decoded = pcall(function() return HttpService:JSONDecode(content) end)
+    if not ok2 or not decoded then return end
+    if decoded.State then
+        for k, v in pairs(decoded.State) do
+            if State[k] ~= nil then
+                State[k] = v
+                if UISetters[k] then UISetters[k](v) end
+            end
+        end
+    end
+    if decoded.Values then
+        for k, v in pairs(decoded.Values) do
+            if Values[k] ~= nil then Values[k] = v end
+        end
+    end
+    pcall(function() setScale(Values.uiScale) end)
+    pcall(function() TranspInput.Text = tostring(math.floor(Values.uiTransparency * 100)) end)
+    pcall(function() MainFrame.BackgroundTransparency = Values.uiTransparency end)
+    pcall(function() setFloatSize(Values.floatSize, true) end)
+    pcall(function() setRunSpeed(Values.runSpeed) end)
+    pcall(function() setHitboxSize(Values.hitboxSize) end)
+    pcall(function()
+        BgImage.ImageTransparency = Values.bgImageTransparency
+        BgInput.Text = tostring(math.floor(Values.bgImageTransparency * 100))
+    end)
+    SaveStatusLabel.Text = "✅ تم الاسترجاع"
+    SaveStatusLabel.TextColor3 = Color3.fromRGB(0, 200, 255)
+    task.delay(2, resetSaveLabel)
+end)
+ClearBtn.MouseButton1Click:Connect(function()
+    if not CanSave then return end
+    pcall(function() delfile(SAVE_FILE) end)
+    SaveStatusLabel.Text = "🗑️ تم المسح"
+    SaveStatusLabel.TextColor3 = Color3.fromRGB(255, 170, 0)
+    task.delay(2, resetSaveLabel)
+end)
+
+local ResetRow = makeRow(SettingsPage, 48, Colors.Red, "🔄", "إعادة الشخصية")
+local ResetBtn = createButton(ResetRow, "🔄", 16, UDim2.new(1, -70, 0, 9), UDim2.fromOffset(58, 30), Color3.fromRGB(90, 20, 30))
+addCorner(ResetBtn, UDim.new(0, 8))
+local resetArmed = false
+ResetBtn.MouseButton1Click:Connect(function()
+    if not resetArmed then
+        resetArmed = true
+        ResetBtn.Text = "تأكيد؟"
+        task.delay(3, function()
+            if not IsAlive then return end
+            pcall(function() resetArmed = false ResetBtn.Text = "🔄" end)
+        end)
+    else
+        resetArmed = false
+        ResetBtn.Text = "🔄"
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then hum.Health = 0 end
+            end
+        end)
+    end
+end)
+
+-- ================================================================================
+-- تبويب المعلومات
+-- ================================================================================
+local InfoBox = createFrame(InfoPage, UDim2.new(0, 10, 0, 10), UDim2.new(1, -20, 0, 56), Color3.fromRGB(11, 16, 36))
+addCorner(InfoBox, UDim.new(0, 12))
+addStroke(InfoBox, Colors.Blue, 2)
+local InfoTitle = createLabel(InfoBox, "وادي حس — اركض، ابقَ بطلاً، وصل للنهاية!", 15, UDim2.fromOffset(10, 0), UDim2.new(1, -20, 1, 0), Color3.fromRGB(190, 235, 255))
+InfoTitle.TextWrapped = true
+local StatsBox = createFrame(InfoPage, UDim2.new(0, 10, 0, 74), UDim2.new(1, -20, 0, 236), Color3.fromRGB(11, 16, 36))
+addCorner(StatsBox, UDim.new(0, 12))
+addStroke(StatsBox, Colors.Cyan, 2)
+local StatsLabel = createLabel(StatsBox, "", 15, UDim2.fromOffset(10, 6), UDim2.new(1, -20, 1, -12), Colors.White)
+StatsLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatsLabel.TextYAlignment = Enum.TextYAlignment.Top
+StatsLabel.TextWrapped = true
+
+local fpsN, fpsT = 0, 0
+bind(RunService.RenderStepped, function(dt)
+    fpsN += 1 fpsT += dt
+    if fpsT >= 0.5 then
+        local fps = math.floor(fpsN / fpsT + 0.5)
+        fpsN, fpsT = 0, 0
+        if InfoPage.Visible then
+            local ping = 0
+            pcall(function() ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue() + 0.5) end)
+            local pos = "-"
+            local c = LocalPlayer.Character
+            if c then
+                local r = c:FindFirstChild("HumanoidRootPart")
+                if r then pos = math.floor(r.Position.X) .. ", " .. math.floor(r.Position.Y) .. ", " .. math.floor(r.Position.Z) end
+            end
+            StatsLabel.Text = "الإطارات: " .. fps
+                .. "\nزمن الاستجابة: " .. ping .. " ميث"
+                .. "\nعدد اللاعبين: " .. #Players:GetPlayers() .. "/" .. Players.MaxPlayers
+                .. "\nالشخصية: " .. LocalPlayer.DisplayName
+                .. "\nالموقع: " .. pos
+                .. "\n\nاختصارات: RightShift (إخفاء/إظهار)"
+        end
+    end
+end)
+
+-- ================================================================================
+-- التبويبات
+-- ================================================================================
+local TabList = {}
+local function showPage(page)
+    for _, t in ipairs(TabList) do
+        local active = t.page == page
+        t.page.Visible = active
+        t.btn.BackgroundColor3 = active and Color3.fromRGB(18, 55, 130) or Colors.Navy
+        t.stroke.Transparency = active and 0 or 1
+    end
+end
+local function makeTab(text, y, page)
+    local b = createButton(MainFrame, text, 15, UDim2.fromOffset(10, y), UDim2.fromOffset(104, 36), Colors.Navy, Color3.fromRGB(150, 220, 255))
+    b.ZIndex = 3
+    addCorner(b, UDim.new(0, 10))
+    local s = addStroke(b, Colors.Blue, 2)
+    table.insert(TabList, {btn = b, page = page, stroke = s})
+    b.MouseButton1Click:Connect(function() showPage(page) end)
+end
+makeTab("🏠 الرئيسية", 160, HomePage)
+makeTab("⚙️ الإعدادات", 200, SettingsPage)
+makeTab("ℹ️ معلومات", 240, InfoPage)
+showPage(HomePage)
+
+CloseButton.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false
+    FloatingButton.Visible = true
+end)
+MinimizeButton.MouseButton1Click:Connect(function()
+    IsMinimized = not IsMinimized
+    if IsMinimized then
+        MainFrame.Size = UDim2.new(0, 500, 0, 80)
+        ContentPanel.Visible = false
+        for _, t in ipairs(TabList) do t.btn.Visible = false end
+        Signature.Visible = false
+    else
+        MainFrame.Size = UDim2.new(0, 500, 0, 440)
+        ContentPanel.Visible = true
+        for _, t in ipairs(TabList) do t.btn.Visible = true end
+        Signature.Visible = true
+    end
+end)
+bind(UserInputService.InputBegan, function(i, gp)
+    if gp then return end
+    if i.KeyCode == Enum.KeyCode.RightShift then
+        local show = not MainFrame.Visible
+        MainFrame.Visible = show
+        FloatingButton.Visible = not show
+    end
+end)
+
+_G.KhalilCleanup = function()
+    IsAlive = false
+    for _, c in ipairs(Connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    Connections = {}
+    pcall(function() ScreenGui:Destroy() end)
+end
+print("=====================================================")
+print("  سكربت خليل | Huss Valley Edition v3 Clean")
+print("  by خليل 👑")
+print("  ✅ بدون UIGradient — لا أخطاء")
+print("  🏃 سرعة | 🦸 ابقَ بطلاً | 🚀 انتقال | 🚁 طيران")
+print("  🦘 قفز | 🛡️ خالد | 🎯 هيت بوكس")
+print("  اضغط RightShift لإخفاء/إظهار الواجهة")
+print("=====================================================")
