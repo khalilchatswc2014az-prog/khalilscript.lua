@@ -1,0 +1,1159 @@
+-- ================================================================================
+-- ⚽ Khalil UI - Flick Football | v2.0.0 DEFINITIVE
+-- ================================================================================
+-- PLACE ID: 79530930758685
+-- ================================================================================
+-- 🛡️ SELF-HEALING SCRIPT
+-- - أي دالة غير موجودة → fallback تلقائي
+-- - أي خطأ متكرر → تعطيل ذكي للميزة
+-- - أي تغيير في اللعبة → تكيّف تلقائي
+-- - أي تغيير في المنفذ → عمل بديل
+-- - لا يمكن أن يتوقف عن العمل كلياً
+-- ================================================================================
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🔧 ADAPTIVE LAYER (طبقة التكيف المستقبلي)
+-- ═══════════════════════════════════════════════════════════════
+local function safeGet(service)
+    local ok, s = pcall(function() return game:GetService(service) end)
+    return ok and s or nil
+end
+
+local Players     = safeGet("Players")
+local UIS         = safeGet("UserInputService")
+local RunService  = safeGet("RunService")
+local Lighting    = safeGet("Lighting")
+local VirtualUser = safeGet("VirtualUser")
+local VIM         = safeGet("VirtualInputManager")
+local LocalPlayer = Players and Players.LocalPlayer or nil
+
+if not LocalPlayer then
+    warn("[Khalil UI] ❌ LocalPlayer unavailable — aborting")
+    return
+end
+
+-- ✅ Adaptive services (قد تتغير في المستقبل)
+local hasVIM = VIM and type(VIM.SendMouseButtonEvent) == "function"
+local hasVirtualUser = VirtualUser and type(VirtualUser.CaptureController) == "function"
+local hasTouch = UIS and UIS.TouchEnabled or false
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🧹 التنظيف
+-- ═══════════════════════════════════════════════════════════════
+if _G.KhalilCleanup then pcall(_G.KhalilCleanup) task.wait(0.15) end
+pcall(function()
+    for _, name in ipairs({"KhalilUI", "KhalilFlyDPad"}) do
+        local old = game.CoreGui:FindFirstChild(name)
+        if old then old:Destroy() end
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🔗 نظام الحماية
+-- ═══════════════════════════════════════════════════════════════
+local trackedConns = {}
+local isShuttingDown = false
+local errorBudget = {}  -- ✅ ميزانية أخطاء لكل ميزة
+
+local function logErr(ctx, err)
+    warn("[Khalil UI] ⚠️ " .. ctx .. ": " .. tostring(err))
+end
+
+local function track(conn)
+    if isShuttingDown then
+        if conn then pcall(function() conn:Disconnect() end) end
+        return conn
+    end
+    if conn then table.insert(trackedConns, conn) end
+    return conn
+end
+
+local function disconnectAll()
+    isShuttingDown = true
+    for _, c in ipairs(trackedConns) do
+        pcall(function() c:Disconnect() end)
+    end
+    trackedConns = {}
+end
+
+-- ✅ يحمي أي loop من الفشل المتكرر
+local function guardedLoop(name, feature, fn, waitTime)
+    task.spawn(function()
+        local errCount = 0
+        while vars[feature] and not isShuttingDown do
+            local ok, err = pcall(fn)
+            if not ok then
+                errCount = errCount + 1
+                if errCount >= 5 then
+                    logErr(name .. " auto-disabled", err)
+                    vars[feature] = false
+                    break
+                end
+            else
+                errCount = 0
+            end
+            task.wait(waitTime or 0.1)
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🎨 الواجهة (Adaptive)
+-- ═══════════════════════════════════════════════════════════════
+local function getUIParent()
+    -- جرّب كل البدائل المتاحة
+    local methods = {gethui, get_hidden_gui, function() return game.CoreGui end}
+    for _, m in ipairs(methods) do
+        if m then
+            local ok, h = pcall(m)
+            if ok and h then return h end
+        end
+    end
+    return game.CoreGui
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "KhalilUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 999
+pcall(function() ScreenGui.Parent = getUIParent() end)
+
+-- حجم تكيفي
+local vp = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1920, 1080)
+local UI_SCALE = math.clamp(math.min(vp.X / 1000, vp.Y / 800), 0.65, 1.0)
+local MAIN_W = math.floor(310 * UI_SCALE)
+local MAIN_H = math.floor(810 * UI_SCALE)
+
+local Main = Instance.new("Frame")
+Main.Size = UDim2.fromOffset(MAIN_W, MAIN_H)
+Main.Position = _G.KhalilUIPos or UDim2.new(0.5, -math.floor(MAIN_W/2), 0.5, -math.floor(MAIN_H/2))
+Main.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.Parent = ScreenGui
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 14)
+
+local ms = Instance.new("UIStroke", Main)
+ms.Color = Color3.fromRGB(0, 200, 80)
+ms.Thickness = 2
+ms.Transparency = 0.2
+
+local Drag = Instance.new("Frame", Main)
+Drag.Size = UDim2.new(1, 0, 0, math.floor(48 * UI_SCALE))
+Drag.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+Drag.BorderSizePixel = 0
+Instance.new("UICorner", Drag).CornerRadius = UDim.new(0, 14)
+
+local Title = Instance.new("TextLabel", Drag)
+Title.Size = UDim2.new(1, -100, 1, 0)
+Title.Position = UDim2.fromOffset(14, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "⚽ Flick Football | v2.0.0"
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = math.floor(14 * UI_SCALE)
+Title.TextColor3 = Color3.fromRGB(240, 240, 240)
+Title.TextXAlignment = Enum.TextXAlignment.Left
+
+local Minimize = Instance.new("TextButton", Drag)
+Minimize.Size = UDim2.fromOffset(36, 36)
+Minimize.Position = UDim2.new(1, -80, 0, 6)
+Minimize.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+Minimize.Text = "—"
+Minimize.Font = Enum.Font.GothamBold
+Minimize.TextSize = 18
+Minimize.TextColor3 = Color3.fromRGB(255, 255, 255)
+Minimize.BorderSizePixel = 0
+Instance.new("UICorner", Minimize).CornerRadius = UDim.new(0, 8)
+
+local Close = Instance.new("TextButton", Drag)
+Close.Size = UDim2.fromOffset(36, 36)
+Close.Position = UDim2.new(1, -42, 0, 6)
+Close.BackgroundColor3 = Color3.fromRGB(200, 50, 60)
+Close.Text = "✕"
+Close.Font = Enum.Font.GothamBold
+Close.TextSize = 16
+Close.TextColor3 = Color3.fromRGB(255, 255, 255)
+Close.BorderSizePixel = 0
+Instance.new("UICorner", Close).CornerRadius = UDim.new(0, 8)
+
+local ButtonsFrame = Instance.new("Frame", Main)
+ButtonsFrame.Size = UDim2.new(1, 0, 1, -48)
+ButtonsFrame.Position = UDim2.fromOffset(0, math.floor(48 * UI_SCALE))
+ButtonsFrame.BackgroundTransparency = 1
+ButtonsFrame.ClipsDescendants = true
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🧩 دوال الإنشاء
+-- ═══════════════════════════════════════════════════════════════
+
+local function createButton(text, yPos, onClick, isToggle, height)
+    height = height or 44
+    local btn = Instance.new("TextButton", ButtonsFrame)
+    btn.Size = UDim2.new(1, -20, 0, height)
+    btn.Position = UDim2.fromOffset(10, yPos)
+    btn.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+    btn.Text = text
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = math.floor(13 * UI_SCALE)
+    btn.TextColor3 = Color3.fromRGB(240, 240, 240)
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+
+    local s = Instance.new("UIStroke", btn)
+    s.Color = Color3.fromRGB(40, 40, 55)
+    s.Thickness = 1.5
+
+    local lastClick = 0
+    local toggled = false
+
+    local function handle()
+        if isShuttingDown then return end
+        if tick() - lastClick < 0.3 then return end
+        lastClick = tick()
+        if isToggle then
+            toggled = not toggled
+            s.Color = toggled and Color3.fromRGB(0, 200, 80) or Color3.fromRGB(40, 40, 55)
+            btn.BackgroundColor3 = toggled and Color3.fromRGB(20, 35, 25) or Color3.fromRGB(22, 22, 30)
+            if onClick then
+                local ok, err = pcall(onClick, toggled)
+                if not ok then logErr("Button " .. text, err) end
+            end
+        else
+            if onClick then
+                local ok, err = pcall(onClick)
+                if not ok then logErr("Button " .. text, err) end
+            end
+        end
+    end
+
+    btn.MouseButton1Click:Connect(handle)
+    if hasTouch then
+        pcall(function() btn.TouchTap:Connect(handle) end)
+    end
+    return btn
+end
+
+local function createSlider(name, yPos, minVal, maxVal, defVal, onChange)
+    local frame = Instance.new("Frame", ButtonsFrame)
+    frame.Size = UDim2.new(1, -20, 0, 58)
+    frame.Position = UDim2.fromOffset(10, yPos)
+    frame.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+    frame.BorderSizePixel = 0
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+
+    local lbl = Instance.new("TextLabel", frame)
+    lbl.Size = UDim2.new(1, -10, 0, 22)
+    lbl.Position = UDim2.fromOffset(8, 4)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = name .. ": " .. tostring(defVal)
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = math.floor(12 * UI_SCALE)
+    lbl.TextColor3 = Color3.fromRGB(200, 200, 220)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local bar = Instance.new("Frame", frame)
+    bar.Size = UDim2.new(1, -20, 0, 12)
+    bar.Position = UDim2.fromOffset(10, 34)
+    bar.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+    bar.BorderSizePixel = 0
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 6)
+
+    local fill = Instance.new("Frame", bar)
+    fill.Size = UDim2.new((defVal - minVal) / (maxVal - minVal), 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(0, 200, 80)
+    fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 6)
+
+    local knob = Instance.new("Frame", bar)
+    knob.Size = UDim2.fromOffset(20, 20)
+    knob.Position = UDim2.new((defVal - minVal) / (maxVal - minVal), -10, 0.5, -10)
+    knob.BackgroundColor3 = Color3.fromRGB(240, 240, 240)
+    knob.BorderSizePixel = 0
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+    local dragging = false
+
+    local function updateFromX(x)
+        if isShuttingDown then return end
+        local bw = bar.AbsoluteSize.X
+        if bw <= 0 then return end
+        local rel = math.clamp((x - bar.AbsolutePosition.X) / bw, 0, 1)
+        local val = math.floor(minVal + rel * (maxVal - minVal) + 0.5)
+        fill.Size = UDim2.new(rel, 0, 1, 0)
+        knob.Position = UDim2.new(rel, -10, 0.5, -10)
+        lbl.Text = name .. ": " .. tostring(val)
+        if onChange then pcall(onChange, val) end
+    end
+
+    frame.InputBegan:Connect(function(input)
+        if isShuttingDown then return end
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            updateFromX(input.Position.X)
+        end
+    end)
+    track(UIS.InputChanged:Connect(function(input)
+        if isShuttingDown or not dragging then return end
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseMovement then
+            updateFromX(input.Position.X)
+        end
+    end))
+    track(UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end))
+    return frame
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- 📊 المتغيرات
+-- ═══════════════════════════════════════════════════════════════
+local vars = {
+    autoAim = false, autoShoot = false, speedHack = false,
+    infJump = false, noclip = false, fly = false, antiAFK = false,
+    espPlayers = false, espBall = false, fullbright = false,
+    fpsBoost = false, ballMagnet = false
+}
+_G.KhalilVars = vars
+
+local flySpeed = 100
+local aimSmoothness = 5
+local flyMove = { forward = false, backward = false, left = false, right = false, up = false, down = false }
+
+-- ═══════════════════════════════════════════════════════════════
+-- ⚽ فلتر الكرة (Adaptive Pattern)
+-- ═══════════════════════════════════════════════════════════════
+local function isBall(obj)
+    if not obj or not obj.Parent or not obj:IsA("BasePart") then return false end
+    local n = obj.Name:lower()
+    -- Direct names
+    if n == "ball" or n == "football" or n == "soccerball" 
+       or n == "disc" or n == "puck" or n == "soccer" then return true end
+    -- Pattern matching لأي اسم يحتوي "ball" أو "disc"
+    if n:match("ball") and not n:match("balloon") and not n:match("ballast") then return true end
+    if n:match("^disc_%d+$") or n:match("^puck_%d+$") then return true end
+    return false
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🎯 Target Getter (adaptive)
+-- ═══════════════════════════════════════════════════════════════
+local function getAimTarget()
+    local myChar = LocalPlayer.Character
+    if not myChar then return nil end
+    local myRoot = myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+
+    -- Ball أولاً
+    local closestBall, ballDist = nil, math.huge
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if isBall(d) then
+            local dist = (d.Position - myRoot.Position).Magnitude
+            if dist < ballDist and dist < 100 then
+                ballDist = dist
+                closestBall = d
+            end
+        end
+    end
+    if closestBall then return closestBall end
+
+    -- Fallback: أقرب لاعب
+    local closest, shortest = nil, math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Parent and plr.Character then
+            local root = plr.Character:FindFirstChild("HumanoidRootPart")
+            local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+            if root and hum and hum.Health > 0 then
+                local d = (root.Position - myRoot.Position).Magnitude
+                if d < shortest then
+                    shortest = d
+                    closest = root
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- 📷 Camera Bind (Adaptive with guard)
+-- ═══════════════════════════════════════════════════════════════
+local cameraTouch = false
+local cameraBindings = {}
+local cameraBindPending = false
+
+local function unbindCamera()
+    for _, c in ipairs(cameraBindings) do
+        pcall(function() c:Disconnect() end)
+    end
+    cameraBindings = {}
+end
+
+local function bindCamera()
+    if isShuttingDown then return end
+    if not ScreenGui or not ScreenGui.Parent then return end
+    if cameraBindPending then return end
+    cameraBindPending = true
+    task.defer(function()
+        cameraBindPending = false
+        if isShuttingDown then return end
+        unbindCamera()
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        pcall(function()
+            table.insert(cameraBindings, cam.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.Touch then
+                    cameraTouch = true
+                end
+            end))
+            table.insert(cameraBindings, cam.InputEnded:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.Touch then
+                    cameraTouch = false
+                end
+            end))
+        end)
+    end)
+end
+
+bindCamera()
+track(workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(bindCamera))
+track(LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    if not isShuttingDown then bindCamera() end
+end))
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🕹️ D-Pad (Multi-Touch)
+-- ═══════════════════════════════════════════════════════════════
+local DPadGui = Instance.new("ScreenGui")
+DPadGui.Name = "KhalilFlyDPad"
+DPadGui.ResetOnSpawn = false
+DPadGui.IgnoreGuiInset = true
+DPadGui.DisplayOrder = 998
+DPadGui.Enabled = false
+pcall(function() DPadGui.Parent = getUIParent() end)
+
+local DPad = Instance.new("Frame", DPadGui)
+DPad.Size = UDim2.fromOffset(200, 200)
+DPad.Position = UDim2.new(0, 20, 1, -220)
+DPad.BackgroundTransparency = 1
+
+local dPadButtons = {}
+
+local function dPadBtn(text, size, pos, key, activeColor)
+    local b = Instance.new("TextButton", DPad)
+    b.Size = size
+    b.Position = pos
+    b.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+    b.Text = text
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 22
+    b.TextColor3 = Color3.fromRGB(240, 240, 240)
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = false
+    b.BackgroundTransparency = 0.2
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 12)
+    local stroke = Instance.new("UIStroke", b)
+    stroke.Color = Color3.fromRGB(0, 200, 80)
+    stroke.Thickness = 2
+
+    local original = b.BackgroundColor3
+    activeColor = activeColor or Color3.fromRGB(0, 200, 80)
+    local activeInput = nil
+
+    local function activate(input)
+        if isShuttingDown then return end
+        activeInput = input
+        flyMove[key] = true
+        b.BackgroundColor3 = activeColor
+    end
+    local function deactivate()
+        activeInput = nil
+        flyMove[key] = false
+        b.BackgroundColor3 = original
+    end
+
+    b.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            activate(input)
+        end
+    end)
+    b.InputEnded:Connect(function(input)
+        if input == activeInput then deactivate() end
+    end)
+    b.MouseLeave:Connect(function()
+        if not hasTouch then deactivate() end
+    end)
+
+    table.insert(dPadButtons, {
+        button = b, key = key, original = original,
+        activeInput = function() return activeInput end,
+        deactivate = deactivate
+    })
+    return b
+end
+
+local bs = UDim2.fromOffset(60, 60)
+dPadBtn("▲", bs, UDim2.fromOffset(70, 0), "forward")
+dPadBtn("▼", bs, UDim2.fromOffset(70, 140), "backward")
+dPadBtn("◄", bs, UDim2.fromOffset(0, 70), "left")
+dPadBtn("►", bs, UDim2.fromOffset(140, 70), "right")
+dPadBtn("⬆", UDim2.fromOffset(60, 30), UDim2.fromOffset(70, 70), "up", Color3.fromRGB(0, 200, 80))
+dPadBtn("⬇", UDim2.fromOffset(60, 30), UDim2.fromOffset(70, 100), "down", Color3.fromRGB(200, 50, 60))
+
+track(UIS.TouchEnded:Connect(function(input)
+    if isShuttingDown then return end
+    if input.UserInputType ~= Enum.UserInputType.Touch then return end
+    for _, info in ipairs(dPadButtons) do
+        if info.activeInput() == input then info.deactivate() end
+    end
+end))
+
+track(LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    if isShuttingDown then return end
+    for _, info in ipairs(dPadButtons) do
+        pcall(function() info.deactivate() end)
+    end
+end))
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🎯 1. Auto Aim
+-- ═══════════════════════════════════════════════════════════════
+createButton("🎯  تصويب تلقائي (Auto Aim)", 6, function(state)
+    vars.autoAim = state
+    if state then
+        guardedLoop("Auto Aim", "autoAim", function()
+            if not cameraTouch and not vars.fly then
+                local target = getAimTarget()
+                local cam = workspace.CurrentCamera
+                if target and cam then
+                    local tCF = CFrame.new(cam.CFrame.Position, target.Position)
+                    cam.CFrame = cam.CFrame:Lerp(tCF, 1 / aimSmoothness)
+                end
+            end
+        end, 0.03)
+    end
+end, true)
+
+createSlider("نعومة التصويب", 58, 1, 20, 5, function(v)
+    aimSmoothness = math.clamp(v, 1, 20)
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🦵 3. Auto Shoot (مع fallback)
+-- ═══════════════════════════════════════════════════════════════
+local function isPointOnButton(x, y)
+    if not Main or not Main.Visible or not Main.Parent then
+        -- فحص D-Pad فقط
+        if DPadGui and DPadGui.Enabled and DPad and DPad.Parent then
+            local dp = DPad.AbsolutePosition
+            local ds = DPad.AbsoluteSize
+            if x >= dp.X and x <= dp.X + ds.X and y >= dp.Y and y <= dp.Y + ds.Y then
+                return true
+            end
+        end
+        return false
+    end
+    local pos = Main.AbsolutePosition
+    local size = Main.AbsoluteSize
+    if x >= pos.X and x <= pos.X + size.X and y >= pos.Y and y <= pos.Y + size.Y then
+        return true
+    end
+    if DPadGui and DPadGui.Enabled and DPad and DPad.Parent then
+        local dp = DPad.AbsolutePosition
+        local ds = DPad.AbsoluteSize
+        if x >= dp.X and x <= dp.X + ds.X and y >= dp.Y and y <= dp.Y + ds.Y then
+            return true
+        end
+    end
+    return false
+end
+
+createButton("🦵  تسديد تلقائي (Auto Shoot)", 124, function(state)
+    vars.autoShoot = state
+    if state then
+        if not hasVIM then
+            logErr("Auto Shoot", "VirtualInputManager not available")
+            return
+        end
+        guardedLoop("Auto Shoot", "autoShoot", function()
+            local cam = workspace.CurrentCamera
+            if cam then
+                local vp = cam.ViewportSize
+                local cx = math.floor(vp.X * 0.5)
+                local cy = math.floor(vp.Y * 0.55)
+                if isPointOnButton(cx, cy) then return end
+                VIM:SendMouseButtonEvent(cx, cy, 0, true, nil, nil)
+                task.wait(0.08)
+                VIM:SendMouseMoveEvent(cx, cy + 100, nil)
+                task.wait(0.08)
+                VIM:SendMouseButtonEvent(cx, cy + 100, 0, false, nil, nil)
+            end
+        end, 0.8)
+    end
+end, true)
+
+createSlider("سرعة الطيران", 176, 10, 200, 100, function(v)
+    flySpeed = math.clamp(v, 10, 200)
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🕊️ 5. Fly
+-- ═══════════════════════════════════════════════════════════════
+local flyBV, flyBG, flyLoop = nil, nil, nil
+local flyStarting = false
+
+local function startFly()
+    if flyStarting or isShuttingDown then return end
+    flyStarting = true
+    pcall(function()
+        local char = LocalPlayer.Character
+        if not char then flyStarting = false return end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not root then flyStarting = false return end
+
+        for _, o in ipairs(root:GetChildren()) do
+            if o.Name == "KhalilFlyBV" or o.Name == "KhalilFlyBG" then
+                pcall(function() o:Destroy() end)
+            end
+        end
+
+        flyBV = Instance.new("BodyVelocity")
+        flyBV.Name = "KhalilFlyBV"
+        flyBV.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+        flyBV.Velocity = Vector3.new(0, 0, 0)
+        flyBV.Parent = root
+
+        flyBG = Instance.new("BodyGyro")
+        flyBG.Name = "KhalilFlyBG"
+        flyBG.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+        flyBG.P = 10000
+        flyBG.CFrame = root.CFrame
+        flyBG.Parent = root
+
+        if flyLoop then pcall(function() flyLoop:Disconnect() end) end
+        flyLoop = RunService.RenderStepped:Connect(function()
+            if not vars.fly or isShuttingDown then return end
+            pcall(function()
+                local c = LocalPlayer.Character
+                if not c or not c.Parent then return end
+                local r = c:FindFirstChild("HumanoidRootPart")
+                if not r or not r.Parent then return end
+                if not flyBV or not flyBV.Parent then return end
+                if not flyBG or not flyBG.Parent then return end
+
+                local cam = workspace.CurrentCamera
+                if not cam then return end
+                local move = Vector3.new(0, 0, 0)
+                if flyMove.forward  then move = move + cam.CFrame.LookVector end
+                if flyMove.backward then move = move - cam.CFrame.LookVector end
+                if flyMove.left     then move = move - cam.CFrame.RightVector end
+                if flyMove.right    then move = move + cam.CFrame.RightVector end
+                if flyMove.up       then move = move + Vector3.new(0, 1, 0) end
+                if flyMove.down     then move = move - Vector3.new(0, 1, 0) end
+
+                flyBV.Velocity = move * flySpeed
+                flyBG.CFrame = cam.CFrame
+            end)
+        end)
+    end)
+    flyStarting = false
+end
+
+local function stopFly()
+    pcall(function() if flyBV then flyBV:Destroy() end end)
+    pcall(function() if flyBG then flyBG:Destroy() end end)
+    pcall(function() if flyLoop then flyLoop:Disconnect() end end)
+    flyBV, flyBG, flyLoop = nil, nil, nil
+    for k in pairs(flyMove) do flyMove[k] = false end
+    for _, info in ipairs(dPadButtons) do
+        pcall(function() info.deactivate() end)
+    end
+end
+
+createButton("🕊️  طيران (Fly) — مع D-Pad", 234, function(state)
+    vars.fly = state
+    if state then
+        startFly()
+        DPadGui.Enabled = true
+    else
+        stopFly()
+        DPadGui.Enabled = false
+    end
+end, true)
+
+track(LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    if isShuttingDown then return end
+    if vars.fly and LocalPlayer.Character then startFly() end
+end))
+
+track(LocalPlayer.CharacterRemoving:Connect(function()
+    pcall(function() if flyBV then flyBV:Destroy() end end)
+    pcall(function() if flyBG then flyBG:Destroy() end end)
+    flyBV, flyBG = nil, nil
+end))
+
+-- ═══════════════════════════════════════════════════════════════
+-- ⚡ 6. Speed Hack
+-- ═══════════════════════════════════════════════════════════════
+createButton("⚡  سرعة فائقة (Speed Hack)", 278, function(state)
+    vars.speedHack = state
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then hum.WalkSpeed = state and 80 or 16 end
+        end
+    end)
+end, true)
+
+track(LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(0.5)
+    if isShuttingDown then return end
+    if vars.speedHack then
+        pcall(function()
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then hum.WalkSpeed = 80 end
+        end)
+    end
+end))
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🦘 7. Infinite Jump
+-- ═══════════════════════════════════════════════════════════════
+createButton("🦘  قفز لا نهائي (Infinite Jump)", 322, function(state)
+    vars.infJump = state
+end, true)
+
+track(UIS.JumpRequest:Connect(function()
+    if isShuttingDown then return end
+    if vars.infJump then
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+            end
+        end)
+    end
+end))
+
+-- ═══════════════════════════════════════════════════════════════
+-- 👻 8. Noclip
+-- ═══════════════════════════════════════════════════════════════
+local noclipConn = nil
+createButton("👻  اختراق الجدران (Noclip)", 366, function(state)
+    vars.noclip = state
+    if state then
+        if noclipConn then noclipConn:Disconnect() end
+        noclipConn = RunService.Stepped:Connect(function()
+            if not vars.noclip or isShuttingDown then return end
+            pcall(function()
+                local char = LocalPlayer.Character
+                if char then
+                    for _, p in ipairs(char:GetDescendants()) do
+                        if p:IsA("BasePart") then p.CanCollide = false end
+                    end
+                end
+            end)
+        end)
+    else
+        if noclipConn then noclipConn:Disconnect() noclipConn = nil end
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                for _, p in ipairs(char:GetDescendants()) do
+                    if p:IsA("BasePart") then p.CanCollide = true end
+                end
+            end
+        end)
+    end
+end, true)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 👤 9. ESP Players
+-- ═══════════════════════════════════════════════════════════════
+local playerEspMain = nil
+local playerEspChars = {}
+
+local function addPlayerHL(char)
+    if not char or not char.Parent then return end
+    if char:FindFirstChild("KhalilPlayerESP") then return end
+    pcall(function()
+        local h = Instance.new("Highlight")
+        h.Name = "KhalilPlayerESP"
+        h.FillColor = Color3.fromRGB(255, 100, 0)
+        h.OutlineColor = Color3.fromRGB(255, 100, 0)
+        h.FillTransparency = 0.5
+        h.Parent = char
+    end)
+end
+
+local function removePlayerHL(plr)
+    if not plr then return end
+    pcall(function()
+        if plr.Character then
+            local h = plr.Character:FindFirstChild("KhalilPlayerESP")
+            if h then h:Destroy() end
+        end
+    end)
+end
+
+track(Players.PlayerRemoving:Connect(function(plr)
+    if playerEspChars[plr] then
+        pcall(function() playerEspChars[plr]:Disconnect() end)
+        playerEspChars[plr] = nil
+    end
+    removePlayerHL(plr)
+end))
+
+createButton("👤  تحديد اللاعبين (ESP Players)", 410, function(state)
+    vars.espPlayers = state
+    if state then
+        playerEspMain = Players.PlayerAdded:Connect(function(plr)
+            local conn = plr.CharacterAdded:Connect(function(char)
+                if vars.espPlayers then
+                    task.wait(0.5)
+                    if not isShuttingDown then addPlayerHL(char) end
+                end
+            end)
+            playerEspChars[plr] = conn
+            if plr.Character then addPlayerHL(plr.Character) end
+        end)
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character then addPlayerHL(plr.Character) end
+        end
+    else
+        if playerEspMain then playerEspMain:Disconnect() playerEspMain = nil end
+        for plr, conn in pairs(playerEspChars) do
+            pcall(function() conn:Disconnect() end)
+            removePlayerHL(plr)
+        end
+        playerEspChars = {}
+    end
+end, true)
+
+-- ═══════════════════════════════════════════════════════════════
+-- ⚽ 10. ESP Ball
+-- ═══════════════════════════════════════════════════════════════
+local ballEspConn = nil
+
+local function addBallHL(obj)
+    if not obj or not obj.Parent then return end
+    if obj:FindFirstChild("KhalilBallESP") then return end
+    pcall(function()
+        local h = Instance.new("Highlight")
+        h.Name = "KhalilBallESP"
+        h.FillColor = Color3.fromRGB(255, 255, 0)
+        h.OutlineColor = Color3.fromRGB(255, 255, 0)
+        h.FillTransparency = 0.4
+        h.Parent = obj
+    end)
+end
+
+createButton("⚽  تحديد الكرة (ESP Ball)", 454, function(state)
+    vars.espBall = state
+    if state then
+        ballEspConn = workspace.DescendantAdded:Connect(function(d)
+            if vars.espBall and isBall(d) then addBallHL(d) end
+        end)
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if isBall(d) then addBallHL(d) end
+        end
+    else
+        if ballEspConn then ballEspConn:Disconnect() ballEspConn = nil end
+        pcall(function()
+            for _, d in ipairs(workspace:GetDescendants()) do
+                local h = d:FindFirstChild("KhalilBallESP")
+                if h then h:Destroy() end
+            end
+        end)
+    end
+end, true)
+
+-- ═══════════════════════════════════════════════════════════════
+-- ⚽ 11. Ball Magnet
+-- ═══════════════════════════════════════════════════════════════
+local activeBalls = {}
+local ballCacheConn = nil
+
+local function startBallCache()
+    activeBalls = {}
+    pcall(function()
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if isBall(d) then activeBalls[d] = true end
+        end
+    end)
+    if ballCacheConn then ballCacheConn:Disconnect() end
+    ballCacheConn = workspace.DescendantAdded:Connect(function(d)
+        if isBall(d) then activeBalls[d] = true end
+    end)
+end
+
+local function stopBallCache()
+    if ballCacheConn then ballCacheConn:Disconnect() ballCacheConn = nil end
+    activeBalls = {}
+end
+
+createButton("⚽  مغناطيس الكرة (Ball Magnet)", 498, function(state)
+    vars.ballMagnet = state
+    if state then
+        startBallCache()
+        guardedLoop("Ball Magnet", "ballMagnet", function()
+            local char = LocalPlayer.Character
+            if not char then return end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+            for ball in pairs(activeBalls) do
+                if ball and ball.Parent and ball:IsA("BasePart") then
+                    local d = (ball.Position - root.Position).Magnitude
+                    if d <= 30 and d > 0.1 then
+                        ball.Velocity = (root.Position - ball.Position).Unit * 150
+                    end
+                else
+                    activeBalls[ball] = nil
+                end
+            end
+        end, 0.05)
+    else
+        stopBallCache()
+    end
+end, true)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🛡️ 12. Anti-AFK
+-- ═══════════════════════════════════════════════════════════════
+createButton("🛡️  مكافحة الخمول (Anti-AFK)", 542, function(state)
+    vars.antiAFK = state
+    if state then
+        task.spawn(function()
+            while vars.antiAFK and not isShuttingDown do
+                pcall(function()
+                    if hasVirtualUser then
+                        VirtualUser:CaptureController()
+                        VirtualUser:ClickButton1(Vector2.new(0, 0))
+                    end
+                end)
+                for _ = 1, 60 do
+                    if not vars.antiAFK or isShuttingDown then break end
+                    task.wait(1)
+                end
+            end
+        end)
+    end
+end, true)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 💡 13. Fullbright
+-- ═══════════════════════════════════════════════════════════════
+local origLighting = {}
+pcall(function()
+    origLighting = {
+        Brightness = Lighting.Brightness,
+        ClockTime = Lighting.ClockTime,
+        Ambient = Lighting.Ambient,
+        OutdoorAmbient = Lighting.OutdoorAmbient,
+        FogEnd = Lighting.FogEnd,
+        GlobalShadows = Lighting.GlobalShadows
+    }
+end)
+
+createButton("💡  إضاءة كاملة (Fullbright)", 586, function(state)
+    vars.fullbright = state
+    pcall(function()
+        if state then
+            Lighting.Brightness = 2
+            Lighting.ClockTime = 14
+            Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+            Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = false
+        else
+            for k, v in pairs(origLighting) do
+                pcall(function() Lighting[k] = v end)
+            end
+        end
+    end)
+end, true)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🚀 14. FPS Boost
+-- ═══════════════════════════════════════════════════════════════
+local disabledVFX = {}
+local disabledDecals = {}
+
+createButton("🚀  تعزيز الأداء (FPS Boost)", 630, function(state)
+    vars.fpsBoost = state
+    pcall(function()
+        if state then
+            pcall(function()
+                local UGS = UserSettings():GetService("UserGameSettings")
+                UGS.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1
+            end)
+            for _, o in ipairs(workspace:GetDescendants()) do
+                if o:IsA("ParticleEmitter") or o:IsA("Trail")
+                    or o:IsA("Smoke") or o:IsA("Fire") or o:IsA("Sparkles") then
+                    if o.Enabled then
+                        disabledVFX[o] = true
+                        o.Enabled = false
+                    end
+                elseif o:IsA("Decal") or o:IsA("Texture") then
+                    if o.Transparency < 1 then
+                        disabledDecals[o] = o.Transparency
+                        o.Transparency = 1
+                    end
+                end
+            end
+        else
+            pcall(function()
+                local UGS = UserSettings():GetService("UserGameSettings")
+                UGS.SavedQualityLevel = Enum.SavedQualitySetting.Automatic
+            end)
+            for obj in pairs(disabledVFX) do
+                if obj and obj.Parent then
+                    pcall(function() obj.Enabled = true end)
+                end
+            end
+            for obj, t in pairs(disabledDecals) do
+                if obj and obj.Parent then
+                    pcall(function() obj.Transparency = t end)
+                end
+            end
+            disabledVFX = {}
+            disabledDecals = {}
+        end
+    end)
+end, true)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🔄 15. Reset
+-- ═══════════════════════════════════════════════════════════════
+createButton("🔄  إعادة تعيين الشخصية (Reset)", 674, function()
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then hum.Health = 0 end
+        end
+    end)
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 📝 Hint
+-- ═══════════════════════════════════════════════════════════════
+local Hint = Instance.new("TextLabel", ButtonsFrame)
+Hint.Size = UDim2.new(1, -20, 0, 24)
+Hint.Position = UDim2.fromOffset(10, 728)
+Hint.BackgroundTransparency = 1
+Hint.Text = "⚽ v2.0.0 Definitive — Khalil UI"
+Hint.Font = Enum.Font.Gotham
+Hint.TextSize = math.floor(11 * UI_SCALE)
+Hint.TextColor3 = Color3.fromRGB(120, 120, 140)
+Hint.TextXAlignment = Enum.TextXAlignment.Center
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🖱️ Drag
+-- ═══════════════════════════════════════════════════════════════
+do
+    local dragging, dStart, sPos = false, nil, nil
+    Drag.InputBegan:Connect(function(input)
+        if isShuttingDown then return end
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dStart = input.Position
+            sPos = Main.Position
+        end
+    end)
+    Drag.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            local d = input.Position - dStart
+            Main.Position = UDim2.new(
+                sPos.X.Scale, sPos.X.Offset + d.X,
+                sPos.Y.Scale, sPos.Y.Offset + d.Y
+            )
+        end
+    end)
+    Drag.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+            _G.KhalilUIPos = Main.Position
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🎛️ Minimize + Close
+-- ═══════════════════════════════════════════════════════════════
+local minimized = false
+Minimize.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    ButtonsFrame.Visible = not minimized
+    Main.Size = minimized and UDim2.fromOffset(MAIN_W, 48) or UDim2.fromOffset(MAIN_W, MAIN_H)
+    Minimize.Text = minimized and "▢" or "—"
+end)
+
+Close.MouseButton1Click:Connect(function()
+    pcall(_G.KhalilCleanup)
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- 🧹 Cleanup
+-- ═══════════════════════════════════════════════════════════════
+_G.KhalilCleanup = function()
+    if isShuttingDown then return end
+    isShuttingDown = true
+
+    for k in pairs(vars) do vars[k] = false end
+    for k in pairs(flyMove) do flyMove[k] = false end
+
+    disconnectAll()
+    unbindCamera()
+
+    pcall(function() if noclipConn then noclipConn:Disconnect() end end)
+    pcall(function() if flyBV then flyBV:Destroy() end end)
+    pcall(function() if flyBG then flyBG:Destroy() end end)
+    pcall(function() if flyLoop then flyLoop:Disconnect() end end)
+    pcall(function() if playerEspMain then playerEspMain:Disconnect() end end)
+    pcall(function() if ballEspConn then ballEspConn:Disconnect() end end)
+    pcall(function() if ballCacheConn then ballCacheConn:Disconnect() end end)
+
+    for plr, conn in pairs(playerEspChars) do
+        pcall(function() conn:Disconnect() end)
+    end
+    playerEspChars = {}
+
+    for obj in pairs(disabledVFX) do
+        if obj and obj.Parent then
+            pcall(function() obj.Enabled = true end)
+        end
+    end
+    for obj, t in pairs(disabledDecals) do
+        if obj and obj.Parent then
+            pcall(function() obj.Transparency = t end)
+        end
+    end
+    disabledVFX = {}
+    disabledDecals = {}
+
+    pcall(function() if ScreenGui then ScreenGui:Destroy() end end)
+    pcall(function() if DPadGui then DPadGui:Destroy() end end)
+
+    _G.KhalilVars = nil
+
+    print("[Khalil UI v2.0.0] ✅ Cleanup complete")
+end
+
+print("[Khalil UI] 🛡️ v2.0.0 DEFINITIVE — PlaceId: 79530930758685")
+print("[Khalil UI] Self-healing: любой error → graceful degradation")
